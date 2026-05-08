@@ -16,7 +16,7 @@ load_dotenv()
 ATIVOS_MONITORADOS: list[str] = [
     "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",  # Majors
     "AUDJPY", "CHFJPY", "EURGBP", "EURJPY", "EURCHF", "GBPJPY", "NZDJPY",  # Minors
-    "EURCAD", "EURAUD", "AUDCAD", "AUDCHF", "AUDNZD", "CADCHF", "EURCAD",  # Exotics
+    "EURCAD", "EURAUD", "AUDCAD", "AUDCHF", "AUDNZD", "CADCHF",  # Exotics
     "US30", "US500", "USTEC", "DE40", "UK100",  # Indices
     "XAUUSD", "XAGUSD", "BRENT",  # Commodities
     "BTCUSD", "ETHUSD",  # Crypto
@@ -48,5 +48,6 @@ MENSAGEM_ALERTA: str = (
     "🔨 Quebra de Estrutura (BOS): {direcao_bos} @ {nivel_bos:.5f}\n"
     "🟦 Order Block: {ob_fundo:.5f} – {ob_topo:.5f}\n"
     "⬜ FVG Pendente: {fvg_fundo:.5f} – {fvg_topo:.5f}\n"
+    "🎯 Zona de Entrada (OB∩FVG): {overlap_fundo:.5f} – {overlap_topo:.5f}\n"
     "⏰ {timestamp}"
 )

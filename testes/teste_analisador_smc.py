@@ -8,6 +8,7 @@ from smc.analisador_smc import (
     FairValueGap,
     OrderBlock,
     QuebraEstrutura,
+    _calcular_swings,
     detectar_captura_liquidez,
     detectar_quebra_estrutura,
     mapear_zonas_interesse,
@@ -92,6 +93,13 @@ class TestCapturaLiquidez:
         capturas = detectar_captura_liquidez(df, periodo_swing=5, limiar_pavio=0.30)
         assert any(c.direcao == "ALTA" for c in capturas)
 
+    def test_captura_propaga_simbolo(self):
+        df = self._velas_sweep(0.40, "BAIXA")
+        capturas = detectar_captura_liquidez(df, periodo_swing=5, limiar_pavio=0.30, simbolo="EURUSD")
+        bearish = [c for c in capturas if c.direcao == "BAIXA"]
+        assert len(bearish) >= 1
+        assert all(c.simbolo == "EURUSD" for c in bearish)
+
 
 # ---------------------------------------------------------------------------
 # Order Blocks
@@ -146,6 +154,57 @@ class TestOrderBlocks:
         for ob in obs:
             assert not ob.mitigado
 
+    def test_ob_fora_do_horizonte_ignorado(self):
+        ts = _ts(200)
+        velas = [_montar_vela(ts[i], 1.1000, 1.1050, 1.0950, 1.1010) for i in range(200)]
+        # OB bullish no índice 50 — fora do horizonte de 100 velas (inicio=100 para len=200)
+        velas[50] = _montar_vela(ts[50], 1.1020, 1.1060, 1.0980, 1.0990)  # bearish
+        velas[51] = _montar_vela(ts[51], 1.0990, 1.1120, 1.0985, 1.1100)  # bullish
+        velas[52] = _montar_vela(ts[52], 1.1100, 1.1180, 1.1090, 1.1170)  # bullish
+        velas[53] = _montar_vela(ts[53], 1.1170, 1.1230, 1.1160, 1.1220)  # bullish
+
+        obs, _ = mapear_zonas_interesse(_df(velas), "EURUSD")
+        na_zona_antiga = [ob for ob in obs if ob.direcao == "ALTA" and abs(ob.preco_fundo - 1.0980) < 0.0001]
+        assert len(na_zona_antiga) == 0
+
+    def test_ob_bullish_rejeitado_impulso_plano(self):
+        ts = _ts(8)
+        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(8)]
+        # OB candidate: bearish, corpo=0.0090 → 1.5*corpo=0.0135
+        velas[3] = _montar_vela(ts[3], 1.1060, 1.1080, 1.0980, 1.0970)
+        # Impulso: corpo[4]=0.0010 (sem engolfo), close[4]==close[5] (não strictly increasing)
+        velas[4] = _montar_vela(ts[4], 1.1000, 1.1120, 1.0990, 1.1010)
+        velas[5] = _montar_vela(ts[5], 1.1010, 1.1130, 1.1005, 1.1010)  # mesmo close
+        velas[6] = _montar_vela(ts[6], 1.1010, 1.1220, 1.1000, 1.1080)
+
+        obs, _ = mapear_zonas_interesse(_df(velas), "EURUSD")
+        bullish_na_zona = [ob for ob in obs if ob.direcao == "ALTA" and abs(ob.preco_fundo - 1.0980) < 0.0001]
+        assert len(bullish_na_zona) == 0
+
+    def test_ob_ultima_vela_bearish_antes_do_impulso(self):
+        # Cenário 19: duas velas bearish consecutivas antes do impulso bullish.
+        # Apenas a última (índice 4) deve gerar OB; a primeira (índice 3) é rejeitada
+        # porque seu candle seguinte ainda é bearish.
+        ts = _ts(9)
+        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(9)]
+        # Primeira vela bearish — NÃO deve virar OB
+        velas[3] = _montar_vela(ts[3], 1.1060, 1.1080, 1.0940, 1.0980)
+        # Segunda vela bearish (última antes do impulso) — deve virar OB, zona [1.0920, 1.1000]
+        velas[4] = _montar_vela(ts[4], 1.1000, 1.1000, 1.0920, 1.0940)
+        # Impulso bullish: closes estritamente crescentes
+        velas[5] = _montar_vela(ts[5], 1.0950, 1.1120, 1.0945, 1.1100)
+        velas[6] = _montar_vela(ts[6], 1.1100, 1.1180, 1.1090, 1.1170)
+        velas[7] = _montar_vela(ts[7], 1.1170, 1.1230, 1.1160, 1.1220)
+
+        obs, _ = mapear_zonas_interesse(_df(velas), "EURUSD")
+        bullish = [ob for ob in obs if ob.direcao == "ALTA"]
+        # OB da primeira vela bearish (preco_fundo≈1.0940) não deve aparecer
+        ob_primeira = [ob for ob in bullish if abs(ob.preco_fundo - 1.0940) < 0.0001]
+        assert len(ob_primeira) == 0
+        # OB da segunda vela bearish (preco_fundo≈1.0920) deve aparecer
+        ob_ultima = [ob for ob in bullish if abs(ob.preco_fundo - 1.0920) < 0.0001]
+        assert len(ob_ultima) == 1
+
 
 # ---------------------------------------------------------------------------
 # Fair Value Gaps
@@ -188,6 +247,18 @@ class TestFairValueGap:
         _, fvgs = mapear_zonas_interesse(_df(velas), "EURUSD")
         bullish = [f for f in fvgs if f.direcao == "ALTA"]
         assert len(bullish) >= 1
+
+    def test_fvg_fora_do_horizonte_ignorado(self):
+        ts = _ts(200)
+        velas = [_montar_vela(ts[i], 1.0950, 1.1000, 1.0920, 1.0970) for i in range(200)]
+        # FVG bearish no índice 50 — fora do horizonte de 100 velas (inicio=100 para len=200)
+        velas[50] = _montar_vela(ts[50], 1.1060, 1.1080, 1.1040, 1.1070)  # minima=1.1040
+        velas[51] = _montar_vela(ts[51], 1.1070, 1.1090, 1.1050, 1.1080)
+        velas[52] = _montar_vela(ts[52], 1.0990, 1.1020, 1.0960, 1.1000)  # maxima=1.1020
+
+        _, fvgs = mapear_zonas_interesse(_df(velas), "EURUSD")
+        fvg_antigo = [f for f in fvgs if f.direcao == "BAIXA" and abs(f.preco_topo - 1.1040) < 0.0001]
+        assert len(fvg_antigo) == 0
 
     def test_fvg_mitigado_excluido(self):
         ts = _ts(5)
@@ -247,6 +318,20 @@ class TestQuebraEstrutura:
         quebras = detectar_quebra_estrutura(df, "EURUSD", periodo_swing=5)
         assert any(q.direcao == "BAIXA" for q in quebras)
 
+    def test_bos_deduplica_mesmo_swing(self):
+        ts = _ts(25)
+        velas = [_montar_vela(ts[i], 1.1000, 1.1050, 1.0950, 1.1010) for i in range(25)]
+        # Swing high em 12
+        velas[12] = _montar_vela(ts[12], 1.1000, 1.1200, 1.0950, 1.1100)
+        # Três candles consecutivos na janela fechando acima do swing high 1.1200
+        velas[20] = _montar_vela(ts[20], 1.1200, 1.1280, 1.1190, 1.1250)
+        velas[21] = _montar_vela(ts[21], 1.1250, 1.1310, 1.1240, 1.1280)
+        velas[22] = _montar_vela(ts[22], 1.1280, 1.1340, 1.1270, 1.1310)
+
+        quebras = detectar_quebra_estrutura(_df(velas), "EURUSD", periodo_swing=5)
+        bos_no_nivel = [q for q in quebras if q.direcao == "ALTA" and abs(q.nivel_rompido - 1.1200) < 0.0001]
+        assert len(bos_no_nivel) == 1
+
     def test_bos_rejeitado_apenas_wick(self):
         ts = _ts(25)
         velas = [_montar_vela(ts[i], 1.1000, 1.1050, 1.0950, 1.1010) for i in range(25)]
@@ -279,6 +364,7 @@ class TestVerificarConfluencia:
         return QuebraEstrutura(
             simbolo="EURUSD", direcao=direcao,
             nivel_rompido=1.1100,
+            swing_tempo=datetime(2024, 1, 1, 12, tzinfo=timezone.utc),  # após captura (00:00)
             tempo=datetime(2024, 1, 2, tzinfo=timezone.utc),
         )
 
@@ -286,7 +372,7 @@ class TestVerificarConfluencia:
         return OrderBlock(
             id="ob_test", simbolo="EURUSD", direcao=direcao,
             preco_topo=1.1050, preco_fundo=1.1000,
-            tempo=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            tempo=datetime(2023, 12, 31, tzinfo=timezone.utc),  # antes da captura
             mitigado=mitigado,
         )
 
@@ -294,7 +380,7 @@ class TestVerificarConfluencia:
         return FairValueGap(
             id="fvg_test", simbolo="EURUSD", direcao=direcao,
             preco_topo=1.1048, preco_fundo=1.1002,
-            tempo=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            tempo=datetime(2023, 12, 31, tzinfo=timezone.utc),  # antes da captura
             mitigado=mitigado,
         )
 
@@ -358,3 +444,70 @@ class TestVerificarConfluencia:
             [self._ob("BAIXA")], [fvg_longe],
             preco_atual_m15=1.1025,
         ) is False
+
+    def test_preco_em_ob_mas_fora_da_sobreposicao(self):
+        # Cenário 22: OB [1.1000, 1.1060], FVG [1.1035, 1.1080]
+        # Sobreposição = [1.1035, 1.1060]; preço=1.1010 → dentro do OB, fora da sobreposição
+        ob = OrderBlock(
+            id="ob_p", simbolo="EURUSD", direcao="BAIXA",
+            preco_topo=1.1060, preco_fundo=1.1000,
+            tempo=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            mitigado=False,
+        )
+        fvg = FairValueGap(
+            id="fvg_p", simbolo="EURUSD", direcao="BAIXA",
+            preco_topo=1.1080, preco_fundo=1.1035,
+            tempo=datetime(2023, 12, 31, tzinfo=timezone.utc),
+            mitigado=False,
+        )
+        assert verificar_confluencia(
+            self._captura("BAIXA"), self._bos("BAIXA"),
+            [ob], [fvg],
+            preco_atual_m15=1.1010,
+        ) is False
+
+    def test_ob_pos_captura_ignorado(self):
+        # Cenário 20: OB formado depois da captura não deve gerar confluência.
+        ob_tardio = OrderBlock(
+            id="ob_tardio", simbolo="EURUSD", direcao="BAIXA",
+            preco_topo=1.1050, preco_fundo=1.1000,
+            tempo=datetime(2024, 1, 2, tzinfo=timezone.utc),  # após captura (01-01)
+            mitigado=False,
+        )
+        assert verificar_confluencia(
+            self._captura("BAIXA"), self._bos("BAIXA"),
+            [ob_tardio], [self._fvg("BAIXA")],
+            preco_atual_m15=1.1025,
+        ) is False
+
+    def test_bos_com_swing_pre_captura_rejeitado(self):
+        # Cenário 21: swing_tempo anterior à captura → BOS confirma estrutura
+        # pré-existente, não a nova estrutura criada pelo impulso pós-manipulação.
+        bos_swing_antigo = QuebraEstrutura(
+            simbolo="EURUSD", direcao="BAIXA",
+            nivel_rompido=1.1100,
+            swing_tempo=datetime(2023, 12, 30, tzinfo=timezone.utc),  # antes da captura
+            tempo=datetime(2024, 1, 2, tzinfo=timezone.utc),
+        )
+        assert verificar_confluencia(
+            self._captura("BAIXA"), bos_swing_antigo,
+            [self._ob("BAIXA")], [self._fvg("BAIXA")],
+            preco_atual_m15=1.1025,
+        ) is False
+
+
+# ---------------------------------------------------------------------------
+# Internos
+# ---------------------------------------------------------------------------
+
+class TestInternos:
+    """Testa funções privadas que implementam comportamentos críticos."""
+
+    def test_ultimo_candle_excluido_de_swing(self):
+        ts = _ts(15)
+        velas = [_montar_vela(ts[i], 1.1000, 1.1050, 1.0950, 1.1010) for i in range(15)]
+        # Último candle (índice 14) tem maxima extrema — não deve virar swing
+        velas[14] = _montar_vela(ts[14], 1.1000, 1.2000, 1.0990, 1.1010)
+
+        swings_high, _ = _calcular_swings(_df(velas), periodo=5)
+        assert 14 not in swings_high

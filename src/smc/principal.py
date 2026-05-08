@@ -18,6 +18,7 @@ from smc.configuracoes import (
     VELAS_HISTORICO,
 )
 from smc.analisador_smc import (
+    _zonas_sobrepoem,
     detectar_captura_liquidez,
     detectar_quebra_estrutura,
     mapear_zonas_interesse,
@@ -58,7 +59,7 @@ def _processar_simbolo(
         logger.warning("Dados insuficientes para %s no M15.", simbolo)
         return
 
-    capturas = detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO)
+    capturas = detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO, simbolo)
     quebras = detectar_quebra_estrutura(velas_h4, simbolo, PERIODO_SWING)
     obs, fvgs = mapear_zonas_interesse(velas_h4, simbolo)
 
@@ -77,10 +78,18 @@ def _processar_simbolo(
             for ob in obs:
                 if ob.direcao != captura.direcao:
                     continue
-                if not (ob.preco_fundo <= preco_atual <= ob.preco_topo):
+                if ob.tempo >= captura.tempo:
                     continue
                 for fvg in fvgs:
                     if fvg.direcao != captura.direcao:
+                        continue
+                    if fvg.tempo >= captura.tempo:
+                        continue
+                    if not _zonas_sobrepoem(ob, fvg):
+                        continue
+                    overlap_fundo = max(ob.preco_fundo, fvg.preco_fundo)
+                    overlap_topo  = min(ob.preco_topo,  fvg.preco_topo)
+                    if not (overlap_fundo <= preco_atual <= overlap_topo):
                         continue
 
                     id_sinal = _gerar_id_sinal(simbolo, ob.id, fvg.id)
@@ -98,6 +107,8 @@ def _processar_simbolo(
                         ob_topo=ob.preco_topo,
                         fvg_fundo=fvg.preco_fundo,
                         fvg_topo=fvg.preco_topo,
+                        overlap_fundo=overlap_fundo,
+                        overlap_topo=overlap_topo,
                         timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
                     )
 

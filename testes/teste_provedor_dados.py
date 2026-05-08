@@ -31,9 +31,13 @@ class TestConexao:
                 assert provedor.conectar() is False
 
     def test_conectar_sucesso_retorna_true(self):
+        from unittest.mock import MagicMock
         provedor = ProvedorDados(_criar_repo_memoria())
+        tick_mock = MagicMock()
+        tick_mock.time = int(datetime.now(timezone.utc).timestamp())
         with patch("MetaTrader5.initialize", return_value=True):
-            assert provedor.conectar() is True
+            with patch("MetaTrader5.symbol_info_tick", return_value=tick_mock):
+                assert provedor.conectar() is True
 
     def test_obter_velas_sem_conexao_retorna_none(self):
         provedor = ProvedorDados(_criar_repo_memoria())

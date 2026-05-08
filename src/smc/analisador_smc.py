@@ -44,6 +44,7 @@ class QuebraEstrutura:
     simbolo: str
     direcao: str
     nivel_rompido: float
+    swing_tempo: datetime
     tempo: datetime
 
 
@@ -51,27 +52,32 @@ def detectar_captura_liquidez(
     velas_h4: pd.DataFrame,
     periodo_swing: int,
     limiar_pavio: float,
+    simbolo: str = "",
 ) -> list[CapturaLiquidez]:
     capturas: list[CapturaLiquidez] = []
     swings_high, swings_low = _calcular_swings(velas_h4, periodo_swing)
+    swings_bearish_vistos: set[float] = set()
+    swings_bullish_vistos: set[float] = set()
 
-    janela_inicio = max(periodo_swing, len(velas_h4) - 3 - 1)
+    janela_inicio = max(periodo_swing, len(velas_h4) - 15 - 1)
     for i in range(janela_inicio, len(velas_h4)):
         vela = velas_h4.iloc[i]
         range_vela = vela["maxima"] - vela["minima"]
         if range_vela == 0:
             continue
 
-        swing_high = _ultimo_swing_anterior(swings_high, i)
-        swing_low = _ultimo_swing_anterior(swings_low, i)
+        res_high = _ultimo_swing_anterior(swings_high, i)
+        res_low = _ultimo_swing_anterior(swings_low, i)
+        swing_high = res_high[1] if res_high is not None else None
+        swing_low = res_low[1] if res_low is not None else None
 
-        if swing_high is not None:
+        if swing_high is not None and swing_high not in swings_bearish_vistos:
             pavio_sup = vela["maxima"] - max(vela["abertura"], vela["fechamento"])
-            if (vela["maxima"] > swing_high
-                    and vela["fechamento"] < swing_high
+            if (vela["maxima"] > swing_high > vela["fechamento"]
                     and pavio_sup / range_vela >= limiar_pavio):
+                swings_bearish_vistos.add(swing_high)
                 capturas.append(CapturaLiquidez(
-                    simbolo=str(velas_h4.get("simbolo", pd.Series([""])).iloc[0]) if "simbolo" in velas_h4 else "",
+                    simbolo=simbolo,
                     direcao="BAIXA",
                     preco_varredura=float(vela["maxima"]),
                     tempo=_tempo_da_vela(vela),
@@ -79,13 +85,13 @@ def detectar_captura_liquidez(
                 ))
                 logger.debug("Captura bearish detectada @ %.5f", vela["maxima"])
 
-        if swing_low is not None:
+        if swing_low is not None and swing_low not in swings_bullish_vistos:
             pavio_inf = min(vela["abertura"], vela["fechamento"]) - vela["minima"]
-            if (vela["minima"] < swing_low
-                    and vela["fechamento"] > swing_low
+            if (vela["minima"] < swing_low < vela["fechamento"]
                     and pavio_inf / range_vela >= limiar_pavio):
+                swings_bullish_vistos.add(swing_low)
                 capturas.append(CapturaLiquidez(
-                    simbolo=str(velas_h4.get("simbolo", pd.Series([""])).iloc[0]) if "simbolo" in velas_h4 else "",
+                    simbolo=simbolo,
                     direcao="ALTA",
                     preco_varredura=float(vela["minima"]),
                     tempo=_tempo_da_vela(vela),
@@ -103,31 +109,41 @@ def detectar_quebra_estrutura(
 ) -> list[QuebraEstrutura]:
     quebras: list[QuebraEstrutura] = []
     swings_high, swings_low = _calcular_swings(velas, periodo_swing)
+    swings_alta_vistos: set[float] = set()
+    swings_baixa_vistos: set[float] = set()
 
-    janela_inicio = max(periodo_swing, len(velas) - 5 - 1)
+    janela_inicio = max(periodo_swing, len(velas) - 15 - 1)
     for i in range(janela_inicio, len(velas)):
         vela = velas.iloc[i]
         fechamento = float(vela["fechamento"])
 
-        swing_high = _ultimo_swing_anterior(swings_high, i)
-        if swing_high is not None and fechamento > swing_high:
-            quebras.append(QuebraEstrutura(
-                simbolo=simbolo,
-                direcao="ALTA",
-                nivel_rompido=float(swing_high),
-                tempo=_tempo_da_vela(vela),
-            ))
-            logger.debug("BOS de Alta @ %.5f (nível: %.5f)", fechamento, swing_high)
+        res_high = _ultimo_swing_anterior(swings_high, i)
+        if res_high is not None:
+            swing_idx_h, swing_high = res_high
+            if fechamento > swing_high and swing_high not in swings_alta_vistos:
+                swings_alta_vistos.add(swing_high)
+                quebras.append(QuebraEstrutura(
+                    simbolo=simbolo,
+                    direcao="ALTA",
+                    nivel_rompido=float(swing_high),
+                    swing_tempo=_tempo_da_vela(velas.iloc[swing_idx_h]),
+                    tempo=_tempo_da_vela(vela),
+                ))
+                logger.debug("BOS de Alta @ %.5f (nível: %.5f)", fechamento, swing_high)
 
-        swing_low = _ultimo_swing_anterior(swings_low, i)
-        if swing_low is not None and fechamento < swing_low:
-            quebras.append(QuebraEstrutura(
-                simbolo=simbolo,
-                direcao="BAIXA",
-                nivel_rompido=float(swing_low),
-                tempo=_tempo_da_vela(vela),
-            ))
-            logger.debug("BOS de Baixa @ %.5f (nível: %.5f)", fechamento, swing_low)
+        res_low = _ultimo_swing_anterior(swings_low, i)
+        if res_low is not None:
+            swing_idx_l, swing_low = res_low
+            if fechamento < swing_low and swing_low not in swings_baixa_vistos:
+                swings_baixa_vistos.add(swing_low)
+                quebras.append(QuebraEstrutura(
+                    simbolo=simbolo,
+                    direcao="BAIXA",
+                    nivel_rompido=float(swing_low),
+                    swing_tempo=_tempo_da_vela(velas.iloc[swing_idx_l]),
+                    tempo=_tempo_da_vela(vela),
+                ))
+                logger.debug("BOS de Baixa @ %.5f (nível: %.5f)", fechamento, swing_low)
 
     return quebras
 
@@ -160,26 +176,52 @@ def verificar_confluencia(
         return False
 
     if captura.direcao != quebra_estrutura.direcao:
+        logger.debug(
+            "Confluência rejeitada: direções divergem (captura=%s, BOS=%s)",
+            captura.direcao, quebra_estrutura.direcao,
+        )
+        return False
+
+    if quebra_estrutura.tempo <= captura.tempo:
+        logger.debug(
+            "Confluência rejeitada: BOS (%s) não é posterior à captura (%s)",
+            quebra_estrutura.tempo, captura.tempo,
+        )
+        return False
+
+    if quebra_estrutura.swing_tempo <= captura.tempo:
+        logger.debug(
+            "Confluência rejeitada: swing do BOS (%s) não é posterior à captura (%s)",
+            quebra_estrutura.swing_tempo, captura.tempo,
+        )
         return False
 
     direcao = captura.direcao
-    for ob in order_blocks:
-        if ob.mitigado or ob.direcao != direcao:
-            continue
-        if not (ob.preco_fundo <= preco_atual_m15 <= ob.preco_topo):
-            continue
-        for fvg in fvgs:
-            if fvg.mitigado or fvg.direcao != direcao:
+    obs_validos = [o for o in order_blocks if not o.mitigado and o.direcao == direcao and o.tempo < captura.tempo]
+    fvgs_validos = [f for f in fvgs if not f.mitigado and f.direcao == direcao and f.tempo < captura.tempo]
+
+    for ob in obs_validos:
+        for fvg in fvgs_validos:
+            if not _zonas_sobrepoem(ob, fvg):
                 continue
-            if _zonas_sobrepoem(ob, fvg):
+            overlap_fundo = max(ob.preco_fundo, fvg.preco_fundo)
+            overlap_topo  = min(ob.preco_topo,  fvg.preco_topo)
+            if overlap_fundo <= preco_atual_m15 <= overlap_topo:
                 logger.info(
-                    "Confluência SMC detectada: captura=%s BOS=%s OB=[%.5f-%.5f] FVG=[%.5f-%.5f]",
+                    "Confluência SMC detectada: captura=%s BOS=%s OB=[%.5f-%.5f] FVG=[%.5f-%.5f] "
+                    "overlap=[%.5f-%.5f] preço=%.5f",
                     captura.direcao, quebra_estrutura.direcao,
                     ob.preco_fundo, ob.preco_topo,
                     fvg.preco_fundo, fvg.preco_topo,
+                    overlap_fundo, overlap_topo, preco_atual_m15,
                 )
                 return True
 
+    logger.debug(
+        "Confluência rejeitada: nenhum OB %s com FVG sobreposto contendo preço=%.5f na zona de sobreposição "
+        "(OBs válidos=%d, FVGs válidos=%d)",
+        direcao, preco_atual_m15, len(obs_validos), len(fvgs_validos),
+    )
     return False
 
 
@@ -189,10 +231,13 @@ def _calcular_swings(
 ) -> tuple[dict[int, float], dict[int, float]]:
     swings_high: dict[int, float] = {}
     swings_low: dict[int, float] = {}
+    n = len(velas)
 
-    for i in range(periodo, len(velas) - periodo):
-        janela_max = velas["maxima"].iloc[i - periodo: i + periodo + 1]
-        janela_min = velas["minima"].iloc[i - periodo: i + periodo + 1]
+    for i in range(periodo, n - 1):
+        # Para as últimas `periodo` velas usa apenas as barras disponíveis à direita
+        lado_dir = min(periodo, n - 1 - i)
+        janela_max = velas["maxima"].iloc[i - periodo: i + lado_dir + 1]
+        janela_min = velas["minima"].iloc[i - periodo: i + lado_dir + 1]
         if velas["maxima"].iloc[i] == janela_max.max():
             swings_high[i] = float(velas["maxima"].iloc[i])
         if velas["minima"].iloc[i] == janela_min.min():
@@ -201,17 +246,19 @@ def _calcular_swings(
     return swings_high, swings_low
 
 
-def _ultimo_swing_anterior(swings: dict[int, float], indice_atual: int) -> float | None:
+def _ultimo_swing_anterior(swings: dict[int, float], indice_atual: int) -> tuple[int, float] | None:
     indices_anteriores = [idx for idx in swings if idx < indice_atual]
     if not indices_anteriores:
         return None
-    return swings[max(indices_anteriores)]
+    idx = max(indices_anteriores)
+    return idx, swings[idx]
 
 
 def _detectar_order_blocks(velas: pd.DataFrame, simbolo: str) -> list[OrderBlock]:
     obs: list[OrderBlock] = []
 
-    for i in range(len(velas) - 4):
+    inicio = max(0, len(velas) - 100)
+    for i in range(inicio, len(velas) - 3):
         vela = velas.iloc[i]
         corpo = float(vela["fechamento"]) - float(vela["abertura"])
         e_bearish = corpo < 0
@@ -220,14 +267,15 @@ def _detectar_order_blocks(velas: pd.DataFrame, simbolo: str) -> list[OrderBlock
         proximas = velas.iloc[i + 1: i + 4]
 
         if e_bearish:
+            proximo_nao_bearish = float(proximas.iloc[0]["fechamento"]) >= float(proximas.iloc[0]["abertura"])
             corpos_proximas = proximas["fechamento"] - proximas["abertura"]
             impulso_bullish = (corpos_proximas > 0).all()
-            fechamentos_crescentes = proximas["fechamento"].is_monotonic_increasing
+            fechamentos_crescentes = (proximas["fechamento"].diff().dropna() > 0).all()
             corpo_ob = abs(corpo)
             proximo_corpo = float(proximas.iloc[0]["fechamento"]) - float(proximas.iloc[0]["abertura"])
             engolfo = proximo_corpo > 1.5 * corpo_ob if corpo_ob > 0 else False
 
-            if impulso_bullish or fechamentos_crescentes or engolfo:
+            if proximo_nao_bearish and (impulso_bullish or fechamentos_crescentes or engolfo):
                 obs.append(OrderBlock(
                     id=_gerar_id(simbolo, vela),
                     simbolo=simbolo,
@@ -238,14 +286,15 @@ def _detectar_order_blocks(velas: pd.DataFrame, simbolo: str) -> list[OrderBlock
                 ))
 
         if e_bullish:
+            proximo_nao_bullish = float(proximas.iloc[0]["fechamento"]) <= float(proximas.iloc[0]["abertura"])
             corpos_proximas = proximas["fechamento"] - proximas["abertura"]
             impulso_bearish = (corpos_proximas < 0).all()
-            fechamentos_decrescentes = proximas["fechamento"].is_monotonic_decreasing
+            fechamentos_decrescentes = (proximas["fechamento"].diff().dropna() < 0).all()
             corpo_ob = abs(corpo)
             proximo_corpo = float(proximas.iloc[0]["abertura"]) - float(proximas.iloc[0]["fechamento"])
             engolfo = proximo_corpo > 1.5 * corpo_ob if corpo_ob > 0 else False
 
-            if impulso_bearish or fechamentos_decrescentes or engolfo:
+            if proximo_nao_bullish and (impulso_bearish or fechamentos_decrescentes or engolfo):
                 obs.append(OrderBlock(
                     id=_gerar_id(simbolo, vela),
                     simbolo=simbolo,
@@ -261,7 +310,8 @@ def _detectar_order_blocks(velas: pd.DataFrame, simbolo: str) -> list[OrderBlock
 def _detectar_fvgs(velas: pd.DataFrame, simbolo: str) -> list[FairValueGap]:
     fvgs: list[FairValueGap] = []
 
-    for i in range(len(velas) - 2):
+    inicio = max(0, len(velas) - 100)
+    for i in range(inicio, len(velas) - 2):
         v0 = velas.iloc[i]
         v2 = velas.iloc[i + 2]
         tempo_fvg = _tempo_da_vela(velas.iloc[i + 1])
@@ -293,16 +343,35 @@ def _marcar_obs_mitigados(obs: list[OrderBlock], velas: pd.DataFrame) -> None:
     for ob in obs:
         velas_pos = velas[velas["tempo"] > ob.tempo]
         for _, v in velas_pos.iterrows():
-            if ob.preco_fundo < float(v["fechamento"]) < ob.preco_topo:
-                ob.mitigado = True
-                break
+            low = float(v["minima"])
+            high = float(v["maxima"])
+            close = float(v["fechamento"])
+            if ob.direcao == "ALTA":
+                # Close dentro da zona OU wick retorna à zona vindo de cima
+                inside = ob.preco_fundo < close < ob.preco_topo
+                wick_retorno = high >= ob.preco_topo and low <= ob.preco_topo and close <= ob.preco_topo
+                if inside or wick_retorno:
+                    ob.mitigado = True
+                    break
+            else:
+                inside = ob.preco_fundo < close < ob.preco_topo
+                wick_retorno = low <= ob.preco_fundo and high >= ob.preco_fundo and close >= ob.preco_fundo
+                if inside or wick_retorno:
+                    ob.mitigado = True
+                    break
 
 
 def _marcar_fvgs_mitigados(fvgs: list[FairValueGap], velas: pd.DataFrame) -> None:
     for fvg in fvgs:
+        gap = fvg.preco_topo - fvg.preco_fundo
+        meio_gap = fvg.preco_fundo + gap * 0.5
         velas_pos = velas[velas["tempo"] > fvg.tempo]
         for _, v in velas_pos.iterrows():
-            if float(v["minima"]) <= fvg.preco_fundo and float(v["maxima"]) >= fvg.preco_topo:
+            # Mitigado quando o preço alcança ao menos 50% do gap
+            if fvg.direcao == "ALTA" and float(v["minima"]) <= meio_gap:
+                fvg.mitigado = True
+                break
+            if fvg.direcao == "BAIXA" and float(v["maxima"]) >= meio_gap:
                 fvg.mitigado = True
                 break
 
