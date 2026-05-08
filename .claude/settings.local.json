@@ -1,0 +1,10 @@
+{
+  "enabledMcpjsonServers": [
+    "code-review-graph"
+  ],
+  "permissions": {
+    "allow": [
+      "Bash(rtk *)"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+README.md
+pyproject.toml
+src/smc/__init__.py
+src/smc/analisador_smc.py
+src/smc/configuracoes.py
+src/smc/notificador.py
+src/smc/principal.py
+src/smc/provedor_dados.py
+src/smc/repositorio.py
+src/smc.egg-info/PKG-INFO
+src/smc.egg-info/SOURCES.txt
+src/smc.egg-info/dependency_links.txt
+src/smc.egg-info/requires.txt
+src/smc.egg-info/top_level.txt

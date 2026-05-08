@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smc"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "MetaTrader5>=5.0.45",
+    "pandas>=2.0.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["testes"]
+
+[tool.mypy]
+mypy_path = ["src", "stubs"]
+strict = true
