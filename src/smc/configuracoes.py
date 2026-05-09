@@ -46,8 +46,8 @@ MENSAGEM_ALERTA: str = (
     "📊 Timeframe: H4 (zona) + M15 (gatilho)\n"
     "📍 Captura de Liquidez: {direcao_captura} @ {preco_varredura:.5f}\n"
     "🔨 Quebra de Estrutura (BOS): {direcao_bos} @ {nivel_bos:.5f}\n"
-    "🟦 Order Block: {ob_fundo:.5f} – {ob_topo:.5f}\n"
-    "⬜ FVG Pendente: {fvg_fundo:.5f} – {fvg_topo:.5f}\n"
+    "🟦 Order Block ({ob_qualidade}): {ob_fundo:.5f} – {ob_topo:.5f}\n"
+    "⬜ FVG Pendente ({fvg_qualidade}): {fvg_fundo:.5f} – {fvg_topo:.5f}\n"
     "🎯 Zona de Entrada (OB∩FVG): {overlap_fundo:.5f} – {overlap_topo:.5f}\n"
     "⏰ {timestamp}"
 )

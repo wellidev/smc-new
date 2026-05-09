@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 import pandas as pd
-import pytest
 
 from smc.analisador_smc import (
     CapturaLiquidez,
@@ -9,11 +8,14 @@ from smc.analisador_smc import (
     OrderBlock,
     QuebraEstrutura,
     _calcular_swings,
+    _marcar_fvgs_testados,
+    _marcar_obs_testados,
     detectar_captura_liquidez,
     detectar_quebra_estrutura,
     mapear_zonas_interesse,
     verificar_confluencia,
 )
+
 
 # --- helpers ---
 
@@ -511,3 +513,148 @@ class TestInternos:
 
         swings_high, _ = _calcular_swings(_df(velas), periodo=5)
         assert 14 not in swings_high
+
+
+# ---------------------------------------------------------------------------
+# OB Testado
+# ---------------------------------------------------------------------------
+
+class TestObTestado:
+    """
+    OB ALTA zona [1.0980, 1.1060].
+    Impulso: candles 4-6 abrem a partir de ~1.0990 (dentro/abaixo do topo).
+    Retrace: candle que abre ACIMA do topo (1.1060) e cujo wick entra na zona.
+    """
+
+    def _velas_ob_alta_com_retrace(self, incluir_retrace: bool) -> pd.DataFrame:
+        ts = _ts(9)
+        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(9)]
+        # OB ALTA: bearish em [1.0980, 1.1060]
+        velas[3] = _montar_vela(ts[3], 1.1020, 1.1060, 1.0980, 1.0990)
+        # Impulso bullish — abrem próximos ao close da vela OB (≈1.0990 < topo=1.1060)
+        velas[4] = _montar_vela(ts[4], 1.0990, 1.1120, 1.0985, 1.1100)
+        velas[5] = _montar_vela(ts[5], 1.1100, 1.1180, 1.1090, 1.1170)
+        velas[6] = _montar_vela(ts[6], 1.1170, 1.1230, 1.1160, 1.1220)
+        if incluir_retrace:
+            # Retrace: abre ACIMA do topo (1.1200 > 1.1060), wick entra na zona (minima=1.1040 <= 1.1060)
+            velas[7] = _montar_vela(ts[7], 1.1200, 1.1210, 1.1040, 1.1150)
+        else:
+            velas[7] = _montar_vela(ts[7], 1.1220, 1.1280, 1.1200, 1.1250)
+        return _df(velas)
+
+    def test_ob_virgem_sem_retrace(self):
+        # Cenário 23: nenhum candle retorna à zona → testado = False
+        df = self._velas_ob_alta_com_retrace(incluir_retrace=False)
+        obs, _ = mapear_zonas_interesse(df, "EURUSD")
+        ob = next((o for o in obs if o.direcao == "ALTA"), None)
+        assert ob is not None
+        assert ob.testado is False
+
+    def test_ob_testado_com_retrace(self):
+        # Cenário 24: candle abre acima do topo e wick entra na zona → testado = True
+        df = self._velas_ob_alta_com_retrace(incluir_retrace=True)
+        obs, _ = mapear_zonas_interesse(df, "EURUSD")
+        ob = next((o for o in obs if o.direcao == "ALTA"), None)
+        assert ob is not None
+        assert ob.testado is True
+
+    def test_impulso_nao_marca_como_testado(self):
+        # Cenário 25: candles do impulso abrem abaixo do topo → não contam como retrace
+        ts = _ts(8)
+        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(8)]
+        velas[3] = _montar_vela(ts[3], 1.1020, 1.1060, 1.0980, 1.0990)
+        # Impulso: todos abrem abaixo de ob.preco_topo=1.1060
+        velas[4] = _montar_vela(ts[4], 1.0990, 1.1120, 1.0985, 1.1100)
+        velas[5] = _montar_vela(ts[5], 1.1100, 1.1180, 1.1090, 1.1170)
+        velas[6] = _montar_vela(ts[6], 1.1170, 1.1230, 1.1160, 1.1220)
+
+        ob_alvo = OrderBlock(
+            id="ob_t", simbolo="EURUSD", direcao="ALTA",
+            preco_topo=1.1060, preco_fundo=1.0980,
+            tempo=pd.Timestamp(ts[3], tz="UTC").to_pydatetime(),
+        )
+        _marcar_obs_testados([ob_alvo], _df(velas))
+        assert ob_alvo.testado is False
+
+    def test_ob_mitigado_ignorado_por_testados(self):
+        # Cenário 26: OB mitigado não deve ser marcado como testado
+        ts = _ts(8)
+        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(8)]
+        velas[3] = _montar_vela(ts[3], 1.1020, 1.1060, 1.0980, 1.0990)
+        # Retrace que abriria como teste
+        velas[7] = _montar_vela(ts[7], 1.1200, 1.1210, 1.1040, 1.1150)
+
+        ob_mitigado = OrderBlock(
+            id="ob_m", simbolo="EURUSD", direcao="ALTA",
+            preco_topo=1.1060, preco_fundo=1.0980,
+            tempo=pd.Timestamp(ts[3], tz="UTC").to_pydatetime(),
+            mitigado=True,
+        )
+        _marcar_obs_testados([ob_mitigado], _df(velas))
+        assert ob_mitigado.testado is False
+
+
+# ---------------------------------------------------------------------------
+# FVG Testado
+# ---------------------------------------------------------------------------
+
+class TestFvgTestado:
+    """
+    FVG ALTA zona [1.1010, 1.1020] (fundo=v0.maxima, topo=v2.minima).
+    Retrace: candle que abre ACIMA do topo (1.1020) e cujo wick entra no gap.
+    FVG BAIXA zona [1.1020, 1.1040] (fundo=v2.maxima, topo=v0.minima).
+    Retrace: candle que abre ABAIXO do fundo (1.1020) e cujo wick entra no gap.
+    """
+
+    def _fvg_alta(self, mitigado: bool = False) -> FairValueGap:
+        return FairValueGap(
+            id="fvg_a", simbolo="EURUSD", direcao="ALTA",
+            preco_topo=1.1020, preco_fundo=1.1010,
+            tempo=pd.Timestamp("2024-01-01 08:00:00", tz="UTC").to_pydatetime(),
+            mitigado=mitigado,
+        )
+
+    def _velas_pos(self, abertura: float, maxima: float, minima: float, fechamento: float) -> pd.DataFrame:
+        ts = [
+            pd.Timestamp("2024-01-01 04:00:00", tz="UTC"),  # antes do FVG (ignorada)
+            pd.Timestamp("2024-01-01 12:00:00", tz="UTC"),  # posterior ao FVG
+        ]
+        return pd.DataFrame([
+            {"tempo": ts[0], "abertura": 1.1000, "maxima": 1.1005, "minima": 1.0995, "fechamento": 1.1002, "volume": 100},
+            {"tempo": ts[1], "abertura": abertura, "maxima": maxima, "minima": minima, "fechamento": fechamento, "volume": 100},
+        ])
+
+    def test_fvg_virgem_sem_retrace(self):
+        # Cenário 27: nenhum candle toca o FVG → testado = False
+        fvg = self._fvg_alta()
+        # Candle posterior fica bem acima do gap (minima=1.1025 > topo=1.1020)
+        df = self._velas_pos(1.1030, 1.1050, 1.1025, 1.1040)
+        _marcar_fvgs_testados([fvg], df)
+        assert fvg.testado is False
+
+    def test_fvg_testado_com_retrace(self):
+        # Cenário 28: candle abre acima do topo e wick entra no gap → testado = True
+        fvg = self._fvg_alta()
+        # abertura=1.1025 >= topo=1.1020 ✓; minima=1.1015 <= topo=1.1020 ✓
+        df = self._velas_pos(1.1025, 1.1030, 1.1015, 1.1022)
+        _marcar_fvgs_testados([fvg], df)
+        assert fvg.testado is True
+
+    def test_fvg_mitigado_ignorado(self):
+        # Cenário 29: FVG mitigado não deve ser marcado como testado
+        fvg = self._fvg_alta(mitigado=True)
+        df = self._velas_pos(1.1025, 1.1030, 1.1015, 1.1022)
+        _marcar_fvgs_testados([fvg], df)
+        assert fvg.testado is False
+
+    def test_fvg_baixa_testado(self):
+        # Cenário 30: FVG BAIXA — candle abre abaixo do fundo e wick entra no gap
+        fvg = FairValueGap(
+            id="fvg_b", simbolo="EURUSD", direcao="BAIXA",
+            preco_topo=1.1040, preco_fundo=1.1020,
+            tempo=pd.Timestamp("2024-01-01 04:00:00", tz="UTC").to_pydatetime(),
+        )
+        # abertura=1.1015 <= fundo=1.1020 ✓; maxima=1.1025 >= fundo=1.1020 ✓
+        df = self._velas_pos(1.1015, 1.1025, 1.1010, 1.1018)
+        _marcar_fvgs_testados([fvg], df)
+        assert fvg.testado is True

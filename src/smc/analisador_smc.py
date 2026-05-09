@@ -17,6 +17,7 @@ class OrderBlock:
     preco_fundo: float
     tempo: datetime
     mitigado: bool = False
+    testado: bool = False
 
 
 @dataclass
@@ -28,6 +29,7 @@ class FairValueGap:
     preco_fundo: float
     tempo: datetime
     mitigado: bool = False
+    testado: bool = False
 
 
 @dataclass
@@ -157,11 +159,18 @@ def mapear_zonas_interesse(
 
     _marcar_obs_mitigados(order_blocks, velas_h4)
     _marcar_fvgs_mitigados(fvgs, velas_h4)
+    _marcar_obs_testados(order_blocks, velas_h4)
+    _marcar_fvgs_testados(fvgs, velas_h4)
 
     obs_ativos = [ob for ob in order_blocks if not ob.mitigado]
     fvgs_ativos = [fvg for fvg in fvgs if not fvg.mitigado]
 
-    logger.debug("OBs ativos: %d | FVGs ativos: %d", len(obs_ativos), len(fvgs_ativos))
+    obs_virgens = sum(1 for ob in obs_ativos if not ob.testado)
+    fvgs_virgens = sum(1 for fvg in fvgs_ativos if not fvg.testado)
+    logger.debug(
+        "OBs ativos: %d (%d virgens) | FVGs ativos: %d (%d virgens)",
+        len(obs_ativos), obs_virgens, len(fvgs_ativos), fvgs_virgens,
+    )
     return obs_ativos, fvgs_ativos
 
 
@@ -208,11 +217,13 @@ def verificar_confluencia(
             overlap_topo  = min(ob.preco_topo,  fvg.preco_topo)
             if overlap_fundo <= preco_atual_m15 <= overlap_topo:
                 logger.info(
-                    "Confluência SMC detectada: captura=%s BOS=%s OB=[%.5f-%.5f] FVG=[%.5f-%.5f] "
+                    "Confluência SMC detectada: captura=%s BOS=%s OB=[%.5f-%.5f]%s FVG=[%.5f-%.5f]%s "
                     "overlap=[%.5f-%.5f] preço=%.5f",
                     captura.direcao, quebra_estrutura.direcao,
                     ob.preco_fundo, ob.preco_topo,
+                    " [TESTADO]" if ob.testado else "",
                     fvg.preco_fundo, fvg.preco_topo,
+                    " [TESTADO]" if fvg.testado else "",
                     overlap_fundo, overlap_topo, preco_atual_m15,
                 )
                 return True
@@ -358,6 +369,38 @@ def _marcar_obs_mitigados(obs: list[OrderBlock], velas: pd.DataFrame) -> None:
                 wick_retorno = low <= ob.preco_fundo and high >= ob.preco_fundo and close >= ob.preco_fundo
                 if inside or wick_retorno:
                     ob.mitigado = True
+                    break
+
+
+def _marcar_obs_testados(obs: list[OrderBlock], velas: pd.DataFrame) -> None:
+    for ob in obs:
+        if ob.mitigado:
+            continue
+        velas_pos = velas[velas["tempo"] > ob.tempo]
+        for _, v in velas_pos.iterrows():
+            if ob.direcao == "ALTA":
+                if float(v["abertura"]) >= ob.preco_topo and float(v["minima"]) <= ob.preco_topo:
+                    ob.testado = True
+                    break
+            else:
+                if float(v["abertura"]) <= ob.preco_fundo and float(v["maxima"]) >= ob.preco_fundo:
+                    ob.testado = True
+                    break
+
+
+def _marcar_fvgs_testados(fvgs: list[FairValueGap], velas: pd.DataFrame) -> None:
+    for fvg in fvgs:
+        if fvg.mitigado:
+            continue
+        velas_pos = velas[velas["tempo"] > fvg.tempo]
+        for _, v in velas_pos.iterrows():
+            if fvg.direcao == "ALTA":
+                if float(v["abertura"]) >= fvg.preco_topo and float(v["minima"]) <= fvg.preco_topo:
+                    fvg.testado = True
+                    break
+            else:
+                if float(v["abertura"]) <= fvg.preco_fundo and float(v["maxima"]) >= fvg.preco_fundo:
+                    fvg.testado = True
                     break
 
 

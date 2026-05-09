@@ -14,7 +14,8 @@ class OrderBlock:
     preco_topo: float
     preco_fundo: float
     tempo: datetime
-    mitigado: bool = False
+    mitigado: bool = False   # True se a zona foi consumida/invalidada. O preço entrou fundo o suficiente para "queimar" a zona. Ela deixa de existir como nível relevante.
+    testado: bool = False   # True se a zona foi tocada ao menos uma vez, mas sobreviveu. O preço recuou até ela (abriu do lado oposto, wick entrou), Smart Money defendeu a zona, e o preço voltou.
 
 @dataclass
 class FairValueGap:
@@ -24,7 +25,8 @@ class FairValueGap:
     preco_topo: float
     preco_fundo: float
     tempo: datetime
-    mitigado: bool = False
+    mitigado: bool = False   # True se a zona foi consumida/invalidada. O preço entrou fundo o suficiente para "queimar" a zona. Ela deixa de existir como nível relevante.
+    testado: bool = False   # True se a zona foi tocada ao menos uma vez, mas sobreviveu. O preço recuou até ela (abriu do lado oposto, wick entrou), Smart Money defendeu a zona, e o preço voltou.
 
 @dataclass
 class CapturaLiquidez:
@@ -110,6 +112,12 @@ BOS:     close rompe o nível (sem exigir wick)       → confirmação estrutur
 - **Mitigação direction-aware:**
   - OB Bullish: `fundo < close < topo` OU wick retorna à zona vindo de cima (`high >= topo AND low <= topo AND close <= topo`)
   - OB Bearish: `fundo < close < topo` OU wick retorna à zona vindo de baixo (`low <= fundo AND high >= fundo AND close >= fundo`)
+- **Qualidade: Virgem vs. Testado (`_marcar_obs_testados`, chamada após mitigação):**
+  - OB Bullish testado: candle posterior com `abertura >= topo AND minima <= topo` (abriu acima da zona e wick entrou nela — retrace de cima)
+  - OB Bearish testado: candle posterior com `abertura <= fundo AND maxima >= fundo` (abriu abaixo da zona e wick entrou nela — retrace de baixo)
+  - O critério "abertura do lado oposto" exclui os candles do próprio impulso (que abrem de dentro ou próximos ao OB)
+  - OBs mitigados são ignorados pelo marcador de testado
+  - Sinal ainda é gerado para OBs testados, mas a mensagem Telegram indica "⚠️ Testado" vs. "Virgem"
 
 **Algoritmo FVG:**
 - Horizonte: últimas 100 velas H4 (~17 dias); FVGs de candles mais antigos são ignorados
@@ -119,6 +127,11 @@ BOS:     close rompe o nível (sem exigir wick)       → confirmação estrutur
 - **Mitigação:** vela posterior alcança ao menos 50% do gap via wick
   - FVG Bullish: `minima <= preco_fundo + 0.5 * gap`
   - FVG Bearish: `maxima >= preco_fundo + 0.5 * gap`
+- **Qualidade: Virgem vs. Testado (`_marcar_fvgs_testados`, chamada após mitigação):**
+  - FVG Bullish testado: candle posterior com `abertura >= preco_topo AND minima <= preco_topo` (abriu acima do gap e wick entrou nele)
+  - FVG Bearish testado: candle posterior com `abertura <= preco_fundo AND maxima >= preco_fundo` (abriu abaixo do gap e wick entrou nele)
+  - FVGs mitigados são ignorados pelo marcador de testado
+  - Sinal ainda é gerado para FVGs testados; a mensagem Telegram indica "⚠️ Testado" vs. "Virgem"
 - Retorna apenas FVGs não mitigados
 
 ---
@@ -179,3 +192,11 @@ Sinal BAIXA: captura="BAIXA" + bos="BAIXA" + ob="BAIXA" + preço dentro do OB be
 | 20 | OB pós-captura ignorado em confluência | OB com `tempo >= captura.tempo` | `verificar_confluencia` retorna `False` |
 | 21 | BOS com swing pré-captura ignorado | `quebra_estrutura.swing_tempo <= captura.tempo` | `verificar_confluencia` retorna `False` |
 | 22 | Preço em OB mas fora da sobreposição | OB [1.1000-1.1060], FVG [1.1035-1.1080], preço=1.1010 | `verificar_confluencia` retorna `False` (preço fora do overlap [1.1035-1.1060]) |
+| 23 | OB virgem — nenhum retorno | ALTA OB + impulso acima, sem retrace | `ob.testado = False` |
+| 24 | OB testado — wick de retrace | ALTA OB + candle abre acima do topo, wick entra na zona | `ob.testado = True` |
+| 25 | Impulso não marca como testado | Candles do impulso abrem abaixo do topo do OB | `ob.testado = False` |
+| 26 | OB mitigado ignorado por `_marcar_obs_testados` | OB com `mitigado=True` + retrace | `ob.testado = False` |
+| 27 | FVG virgem — nenhum retorno | FVG ALTA + candle posterior fica acima do gap | `fvg.testado = False` |
+| 28 | FVG testado — wick de retrace | FVG ALTA + candle abre acima do topo, wick entra no gap | `fvg.testado = True` |
+| 29 | FVG mitigado ignorado | FVG com `mitigado=True` + retrace | `fvg.testado = False` |
+| 30 | FVG BAIXA testado | FVG BAIXA + candle abre abaixo do fundo, wick entra no gap | `fvg.testado = True` |
