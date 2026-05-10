@@ -1,5 +1,5 @@
 import hashlib
-import logging
+import logging.handlers
 import os
 import time
 from datetime import datetime, timezone
@@ -7,6 +7,17 @@ from typing import Any, NamedTuple
 
 import pandas as pd
 
+from smc.analisador_smc import (
+    CapturaLiquidez,
+    FairValueGap,
+    OrderBlock,
+    QuebraEstrutura,
+    _zonas_sobrepoem,
+    detectar_captura_liquidez,
+    detectar_quebra_estrutura,
+    mapear_zonas_interesse,
+    verificar_confluencia,
+)
 from smc.configuracoes import (
     ATIVOS_MONITORADOS,
     CAMINHO_BANCO,
@@ -23,29 +34,35 @@ from smc.configuracoes import (
     VELAS_D1_HISTORICO,
     VELAS_HISTORICO,
 )
-from smc.analisador_smc import (
-    CapturaLiquidez,
-    FairValueGap,
-    OrderBlock,
-    QuebraEstrutura,
-    _zonas_sobrepoem,
-    detectar_captura_liquidez,
-    detectar_quebra_estrutura,
-    mapear_zonas_interesse,
-    verificar_confluencia,
-)
 from smc.filtros import calcular_bias_d1, calcular_risco_rr, verificar_sessao, verificar_zona_premium_discount
 from smc.notificador import Notificador
 from smc.provedor_dados import ProvedorDados
 from smc.repositorio import Repositorio
 
 _NIVEL_LOG = os.getenv("SMC_LOG_LEVEL", "INFO")
-
-logging.basicConfig(
-    level=getattr(logging, _NIVEL_LOG, logging.INFO),
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+_nivel = getattr(logging, _NIVEL_LOG, logging.INFO)
+_fmt = logging.Formatter(
+    "%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+_console_handler = logging.StreamHandler()
+_console_handler.setLevel(logging.INFO)
+_handlers: list[logging.Handler] = [_console_handler]
+
+if _nivel == logging.DEBUG:
+    _caminho_log = os.getenv("SMC_LOG_FILE", os.path.join("logs", "smc_debug.log"))
+    os.makedirs(os.path.dirname(_caminho_log) or ".", exist_ok=True)
+    _file_handler = logging.handlers.RotatingFileHandler(
+        _caminho_log, maxBytes=10 * 1024 * 1024, backupCount=10, encoding="utf-8"
+    )
+    _file_handler.setLevel(logging.DEBUG)
+    _handlers.append(_file_handler)
+
+for _h in _handlers:
+    _h.setFormatter(_fmt)
+
+logging.basicConfig(level=_nivel, handlers=_handlers)
 logger = logging.getLogger(__name__)
 
 
@@ -64,7 +81,7 @@ def _gerar_id_sinal(simbolo: str, ob_id: str, fvg_id: str) -> str:
 
 
 def _obter_dados_mercado(
-    simbolo: str, provedor: ProvedorDados
+        simbolo: str, provedor: ProvedorDados
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None] | None:
     velas_h4 = provedor.obter_velas(simbolo, TIMEFRAME_ESTRUTURAL, VELAS_HISTORICO)
     if velas_h4 is None or len(velas_h4) < 20:
@@ -84,7 +101,7 @@ def _obter_dados_mercado(
 
 
 def _detectar_estrutura_h4(
-    velas_h4: pd.DataFrame, simbolo: str
+        velas_h4: pd.DataFrame, simbolo: str
 ) -> tuple[list[CapturaLiquidez], list[QuebraEstrutura], list[OrderBlock], list[FairValueGap]]:
     capturas = detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO, simbolo)
     quebras = detectar_quebra_estrutura(velas_h4, simbolo, PERIODO_SWING)
@@ -93,11 +110,11 @@ def _detectar_estrutura_h4(
 
 
 def _encontrar_confluencias(
-    capturas: list[CapturaLiquidez],
-    quebras: list[QuebraEstrutura],
-    obs: list[OrderBlock],
-    fvgs: list[FairValueGap],
-    preco_atual: float,
+        capturas: list[CapturaLiquidez],
+        quebras: list[QuebraEstrutura],
+        obs: list[OrderBlock],
+        fvgs: list[FairValueGap],
+        preco_atual: float,
 ) -> list[Confluencia]:
     resultado: list[Confluencia] = []
     for captura in capturas:
@@ -125,7 +142,7 @@ def _encontrar_confluencias(
 
 
 def _calcular_contexto(
-    conf: Confluencia, preco_atual: float, velas_d1: pd.DataFrame | None
+        conf: Confluencia, preco_atual: float, velas_d1: pd.DataFrame | None
 ) -> dict[str, Any]:
     em_sessao = verificar_sessao(conf.captura.tempo)
     bias_d1 = calcular_bias_d1(velas_d1, PERIODO_SWING_D1) if velas_d1 is not None else None
@@ -184,12 +201,12 @@ def _construir_mensagem(simbolo: str, conf: Confluencia, ctx: dict[str, Any]) ->
 
 
 def _processar_confluencia(
-    simbolo: str,
-    conf: Confluencia,
-    preco_atual: float,
-    velas_d1: pd.DataFrame | None,
-    repo: Repositorio,
-    notificador: Notificador,
+        simbolo: str,
+        conf: Confluencia,
+        preco_atual: float,
+        velas_d1: pd.DataFrame | None,
+        repo: Repositorio,
+        notificador: Notificador,
 ) -> None:
     id_sinal = _gerar_id_sinal(simbolo, conf.ob.id, conf.fvg.id)
     if repo.sinal_ja_disparado(id_sinal):
@@ -207,10 +224,10 @@ def _processar_confluencia(
 
 
 def _processar_simbolo(
-    simbolo: str,
-    provedor: ProvedorDados,
-    notificador: Notificador,
-    repo: Repositorio,
+        simbolo: str,
+        provedor: ProvedorDados,
+        notificador: Notificador,
+        repo: Repositorio,
 ) -> None:
     dados = _obter_dados_mercado(simbolo, provedor)
     if dados is None:
