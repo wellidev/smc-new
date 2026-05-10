@@ -7,9 +7,11 @@ try:
 
     TIMEFRAME_H4 = mt5.TIMEFRAME_H4
     TIMEFRAME_M15 = mt5.TIMEFRAME_M15
+    TIMEFRAME_D1 = mt5.TIMEFRAME_D1
 except ImportError:
-    TIMEFRAME_H4 = 16408
+    TIMEFRAME_H4 = 16388
     TIMEFRAME_M15 = 15
+    TIMEFRAME_D1 = 16408
 
 load_dotenv()
 
@@ -26,8 +28,15 @@ TIMEFRAME_ESTRUTURAL: int = TIMEFRAME_H4
 TIMEFRAME_GATILHO: int = TIMEFRAME_M15
 
 VELAS_HISTORICO: int = 500
+VELAS_D1_HISTORICO: int = 50
 PERIODO_SWING: int = 10
+PERIODO_SWING_D1: int = 5
 LIMIAR_PAVIO: float = 0.30
+
+SESSAO_LONDON_INICIO: int = 8
+SESSAO_LONDON_FIM: int = 11
+SESSAO_NY_INICIO: int = 13
+SESSAO_NY_FIM: int = 17
 
 CAMINHO_BANCO: str = os.path.join("banco_dados", "smc.db")
 
@@ -45,9 +54,11 @@ MENSAGEM_ALERTA: str = (
     "🚨 <b>SINAL SMC — {simbolo}</b>\n"
     "📊 Timeframe: H4 (zona) + M15 (gatilho)\n"
     "📍 Captura de Liquidez: {direcao_captura} @ {preco_varredura:.5f}\n"
-    "🔨 Quebra de Estrutura (BOS): {direcao_bos} @ {nivel_bos:.5f}\n"
+    "🔨 BOS ({bos_qualidade}): {direcao_bos} @ {nivel_bos:.5f}\n"
     "🟦 Order Block ({ob_qualidade}): {ob_fundo:.5f} – {ob_topo:.5f}\n"
-    "⬜ FVG Pendente ({fvg_qualidade}): {fvg_fundo:.5f} – {fvg_topo:.5f}\n"
+    "⬜ FVG ({fvg_qualidade}): {fvg_fundo:.5f} – {fvg_topo:.5f}\n"
     "🎯 Zona de Entrada (OB∩FVG): {overlap_fundo:.5f} – {overlap_topo:.5f}\n"
+    "💰 SL: {sl:.5f} | TP: {tp:.5f} | R:R 1:{rr:.1f}\n"
+    "🔍 Sessão: {check_sessao} | Bias D1: {check_bias} | Zona: {check_zona}\n"
     "⏰ {timestamp}"
 )

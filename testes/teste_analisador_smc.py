@@ -7,7 +7,7 @@ from smc.analisador_smc import (
     FairValueGap,
     OrderBlock,
     QuebraEstrutura,
-    _calcular_swings,
+    calcular_swings,
     _marcar_fvgs_testados,
     _marcar_obs_testados,
     detectar_captura_liquidez,
@@ -511,7 +511,7 @@ class TestInternos:
         # Último candle (índice 14) tem maxima extrema — não deve virar swing
         velas[14] = _montar_vela(ts[14], 1.1000, 1.2000, 1.0990, 1.1010)
 
-        swings_high, _ = _calcular_swings(_df(velas), periodo=5)
+        swings_high, _ = calcular_swings(_df(velas), periodo=5)
         assert 14 not in swings_high
 
 
@@ -658,3 +658,86 @@ class TestFvgTestado:
         df = self._velas_pos(1.1015, 1.1025, 1.1010, 1.1018)
         _marcar_fvgs_testados([fvg], df)
         assert fvg.testado is True
+
+
+# ---------------------------------------------------------------------------
+# Displacement BOS
+# ---------------------------------------------------------------------------
+
+class TestDisplacementBos:
+    """
+    Cenários 31-34: campo deslocamento em QuebraEstrutura.
+    Usa periodo_swing=5 e fixture similar aos testes de BOS.
+    """
+
+    def _velas_bos_com_gap(self, bullish: bool, criar_gap: bool) -> pd.DataFrame:
+        ts = _ts(27)
+        velas = [_montar_vela(ts[i], 1.1000, 1.1050, 1.0950, 1.1010) for i in range(27)]
+
+        if bullish:
+            # Swing high em índice 12
+            velas[12] = _montar_vela(ts[12], 1.1000, 1.1200, 1.0950, 1.1100)
+            # BOS candle em índice 22 (close > 1.1200)
+            velas[22] = _montar_vela(ts[22], 1.1200, 1.1350, 1.1210, 1.1300)
+            if criar_gap:
+                # Candle anterior (21): maxima=1.1150, candle posterior (23): minima=1.1180
+                # → high[21]=1.1150 < low[23]=1.1180 → gap bullish
+                velas[21] = _montar_vela(ts[21], 1.1100, 1.1150, 1.1080, 1.1130)
+                velas[23] = _montar_vela(ts[23], 1.1300, 1.1380, 1.1180, 1.1350)
+            else:
+                # Sem gap: candles adjacentes se sobrepõem
+                velas[21] = _montar_vela(ts[21], 1.1100, 1.1250, 1.1080, 1.1200)
+                velas[23] = _montar_vela(ts[23], 1.1300, 1.1380, 1.1200, 1.1350)
+        else:
+            # Swing low em índice 12
+            velas[12] = _montar_vela(ts[12], 1.1000, 1.1050, 1.0800, 1.0900)
+            # BOS candle em índice 22 (close < 1.0800)
+            velas[22] = _montar_vela(ts[22], 1.0800, 1.0840, 1.0650, 1.0700)
+            if criar_gap:
+                # gap bearish: low[21]=1.0870 > high[23]=1.0840
+                velas[21] = _montar_vela(ts[21], 1.0900, 1.0950, 1.0870, 1.0890)
+                velas[23] = _montar_vela(ts[23], 1.0700, 1.0840, 1.0620, 1.0680)
+            else:
+                # Sem gap: candles adjacentes se sobrepõem
+                velas[21] = _montar_vela(ts[21], 1.0900, 1.0950, 1.0820, 1.0860)
+                velas[23] = _montar_vela(ts[23], 1.0700, 1.0860, 1.0620, 1.0680)
+
+        return _df(velas)
+
+    def test_bos_com_displacement(self):
+        # Cenário 31: BOS Bullish onde high[i-1] < low[i+1] → deslocamento=True
+        df = self._velas_bos_com_gap(bullish=True, criar_gap=True)
+        quebras = detectar_quebra_estrutura(df, "EURUSD", periodo_swing=5)
+        bos_alta = [q for q in quebras if q.direcao == "ALTA"]
+        assert len(bos_alta) >= 1
+        assert any(q.deslocamento is True for q in bos_alta)
+
+    def test_bos_sem_displacement(self):
+        # Cenário 32: BOS sem gap entre candles adjacentes → deslocamento=False
+        df = self._velas_bos_com_gap(bullish=True, criar_gap=False)
+        quebras = detectar_quebra_estrutura(df, "EURUSD", periodo_swing=5)
+        bos_alta = [q for q in quebras if q.direcao == "ALTA"]
+        assert len(bos_alta) >= 1
+        assert all(q.deslocamento is False for q in bos_alta)
+
+    def test_bos_ultima_posicao_sem_crash(self):
+        # Cenário 33: BOS próximo ao fim do DataFrame (sem i+1) → deslocamento=False sem crash
+        ts = _ts(16)
+        velas = [_montar_vela(ts[i], 1.1000, 1.1050, 1.0950, 1.1010) for i in range(16)]
+        velas[7] = _montar_vela(ts[7], 1.1000, 1.1200, 1.0950, 1.1100)  # swing high
+        # BOS na penúltima vela (índice 14 = len-2), sem candle posterior
+        velas[14] = _montar_vela(ts[14], 1.1200, 1.1350, 1.1190, 1.1300)
+
+        quebras = detectar_quebra_estrutura(_df(velas), "EURUSD", periodo_swing=5)
+        bos_alta = [q for q in quebras if q.direcao == "ALTA"]
+        assert len(bos_alta) >= 1
+        assert all(q.deslocamento is False for q in bos_alta)
+
+    def test_calcular_swings_importavel_publicamente(self):
+        # Cenário 34: calcular_swings deve ser acessível via import público
+        from smc.analisador_smc import calcular_swings  # noqa: F401
+        ts = _ts(15)
+        velas = [_montar_vela(ts[i], 1.1000, 1.1050, 1.0950, 1.1010) for i in range(15)]
+        highs, lows = calcular_swings(_df(velas), periodo=3)
+        assert isinstance(highs, dict)
+        assert isinstance(lows, dict)

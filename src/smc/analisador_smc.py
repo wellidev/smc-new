@@ -48,6 +48,7 @@ class QuebraEstrutura:
     nivel_rompido: float
     swing_tempo: datetime
     tempo: datetime
+    deslocamento: bool = False
 
 
 def detectar_captura_liquidez(
@@ -57,7 +58,7 @@ def detectar_captura_liquidez(
     simbolo: str = "",
 ) -> list[CapturaLiquidez]:
     capturas: list[CapturaLiquidez] = []
-    swings_high, swings_low = _calcular_swings(velas_h4, periodo_swing)
+    swings_high, swings_low = calcular_swings(velas_h4, periodo_swing)
     swings_bearish_vistos: set[float] = set()
     swings_bullish_vistos: set[float] = set()
 
@@ -110,7 +111,7 @@ def detectar_quebra_estrutura(
     periodo_swing: int,
 ) -> list[QuebraEstrutura]:
     quebras: list[QuebraEstrutura] = []
-    swings_high, swings_low = _calcular_swings(velas, periodo_swing)
+    swings_high, swings_low = calcular_swings(velas, periodo_swing)
     swings_alta_vistos: set[float] = set()
     swings_baixa_vistos: set[float] = set()
 
@@ -119,33 +120,45 @@ def detectar_quebra_estrutura(
         vela = velas.iloc[i]
         fechamento = float(vela["fechamento"])
 
+        tem_proximo = i + 1 < len(velas)
+
         res_high = _ultimo_swing_anterior(swings_high, i)
         if res_high is not None:
             swing_idx_h, swing_high = res_high
             if fechamento > swing_high and swing_high not in swings_alta_vistos:
                 swings_alta_vistos.add(swing_high)
+                desloc = (
+                    tem_proximo
+                    and float(velas.iloc[i - 1]["maxima"]) < float(velas.iloc[i + 1]["minima"])
+                ) if i > 0 else False
                 quebras.append(QuebraEstrutura(
                     simbolo=simbolo,
                     direcao="ALTA",
                     nivel_rompido=float(swing_high),
                     swing_tempo=_tempo_da_vela(velas.iloc[swing_idx_h]),
                     tempo=_tempo_da_vela(vela),
+                    deslocamento=desloc,
                 ))
-                logger.debug("BOS de Alta @ %.5f (nível: %.5f)", fechamento, swing_high)
+                logger.debug("BOS de Alta @ %.5f (nível: %.5f, deslocamento=%s)", fechamento, swing_high, desloc)
 
         res_low = _ultimo_swing_anterior(swings_low, i)
         if res_low is not None:
             swing_idx_l, swing_low = res_low
             if fechamento < swing_low and swing_low not in swings_baixa_vistos:
                 swings_baixa_vistos.add(swing_low)
+                desloc = (
+                    tem_proximo
+                    and float(velas.iloc[i - 1]["minima"]) > float(velas.iloc[i + 1]["maxima"])
+                ) if i > 0 else False
                 quebras.append(QuebraEstrutura(
                     simbolo=simbolo,
                     direcao="BAIXA",
                     nivel_rompido=float(swing_low),
                     swing_tempo=_tempo_da_vela(velas.iloc[swing_idx_l]),
                     tempo=_tempo_da_vela(vela),
+                    deslocamento=desloc,
                 ))
-                logger.debug("BOS de Baixa @ %.5f (nível: %.5f)", fechamento, swing_low)
+                logger.debug("BOS de Baixa @ %.5f (nível: %.5f, deslocamento=%s)", fechamento, swing_low, desloc)
 
     return quebras
 
@@ -236,7 +249,7 @@ def verificar_confluencia(
     return False
 
 
-def _calcular_swings(
+def calcular_swings(
     velas: pd.DataFrame,
     periodo: int,
 ) -> tuple[dict[int, float], dict[int, float]]:

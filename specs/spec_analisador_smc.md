@@ -43,13 +43,24 @@ class QuebraEstrutura:
     nivel_rompido: float
     swing_tempo: datetime   # quando o swing rompido foi formado
     tempo: datetime         # quando o fechamento rompeu o nível
+    deslocamento: bool = False  # True se BOS candle criou FVG com candle i-1 (gap de alta energia)
 ```
 
 ## Funções Públicas
 
+### `calcular_swings(velas, periodo) -> tuple[dict[int, float], dict[int, float]]`
+
+Retorna `(swings_high, swings_low)` — dicionários `{índice: valor}` com os swing highs/lows confirmados.
+- `maxima[i]` é swing high se `maxima[i] == max(maxima[i-N : i+lado_dir+1])` onde `lado_dir = min(N, len-1-i)`
+- `minima[i]` é swing low se `minima[i] == min(minima[i-N : i+lado_dir+1])`
+- O candle de índice `len-1` (candle aberto no MT5) é **excluído** dos candidatos
+- Função pública — pode ser importada por módulos externos (ex: `filtros.py` para bias D1)
+
+---
+
 ### `detectar_captura_liquidez(velas_h4, periodo_swing, limiar_pavio, simbolo="") -> list[CapturaLiquidez]`
 
-**Identificação de swing highs/lows (`_calcular_swings`):**
+**Identificação de swing highs/lows (`calcular_swings`):**
 - `maxima[i]` é swing high se `maxima[i] == max(maxima[i-N : i+lado_dir+1])` onde `lado_dir = min(N, len-1-i)`
 - `minima[i]` é swing low se `minima[i] == min(minima[i-N : i+lado_dir+1])`
 - O candle de índice `len-1` (candle aberto no MT5) é **excluído** dos candidatos; todo swing tem ao menos 1 barra de confirmação à direita
@@ -91,9 +102,16 @@ BOS:     close rompe o nível (sem exigir wick)       → confirmação estrutur
 **BOS de Baixa:** `close[i] < swing_low`
 
 - Janela de relevância: últimas 15 velas H4 (~2,5 dias) — idêntica à captura para garantir cobertura temporal compatível
-- Usa mesma lógica de swing da `detectar_captura_liquidez`
+- Usa `calcular_swings` (função pública, ver abaixo)
 - Deduplicação: cada nível de swing só gera um BOS por direção por ciclo
 - `swing_tempo` registra o tempo da vela que formou o swing rompido (necessário para validação causal em `verificar_confluencia`)
+
+**Critério de Displacement (campo `deslocamento`):**
+```
+BOS Bullish: high[i-1] < low[i+1]  → vela i deixou gap bullish (FVG) entre candle anterior e próximo
+BOS Bearish: low[i-1]  > high[i+1] → vela i deixou gap bearish
+```
+Requer `i + 1 < len(velas)` — se não existir candle à direita, `deslocamento = False`. Displacement indica BOS de alta energia (institucional); ausência não invalida o BOS.
 
 ---
 
@@ -200,3 +218,7 @@ Sinal BAIXA: captura="BAIXA" + bos="BAIXA" + ob="BAIXA" + preço dentro do OB be
 | 28 | FVG testado — wick de retrace | FVG ALTA + candle abre acima do topo, wick entra no gap | `fvg.testado = True` |
 | 29 | FVG mitigado ignorado | FVG com `mitigado=True` + retrace | `fvg.testado = False` |
 | 30 | FVG BAIXA testado | FVG BAIXA + candle abre abaixo do fundo, wick entra no gap | `fvg.testado = True` |
+| 31 | BOS com displacement | BOS Bullish onde `high[i-1] < low[i+1]` | `quebra.deslocamento = True` |
+| 32 | BOS sem displacement | BOS sem gap entre candles adjacentes | `quebra.deslocamento = False` |
+| 33 | BOS na última vela disponível (sem i+1) | BOS no índice `len-2` (sem candle posterior) | `quebra.deslocamento = False` sem crash |
+| 34 | `calcular_swings` acessível como pública | `from smc.analisador_smc import calcular_swings` | não lança `ImportError` |
