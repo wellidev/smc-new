@@ -1,6 +1,5 @@
 from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 from smc.notificador import Notificador

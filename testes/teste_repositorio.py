@@ -1,8 +1,6 @@
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
-import pytest
-
 from smc.repositorio import Repositorio
 
 
