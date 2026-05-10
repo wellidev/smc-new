@@ -16,12 +16,13 @@ except ImportError:
 load_dotenv()
 
 ATIVOS_MONITORADOS: list[str] = [
-    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",  # Majors
-    "AUDJPY", "CHFJPY", "EURGBP", "EURJPY", "EURCHF", "GBPJPY", "NZDJPY",  # Minors
-    "EURCAD", "EURAUD", "AUDCAD", "AUDCHF", "AUDNZD", "CADCHF",  # Exotics
+    "AUDUSD", "EURUSD", "GBPUSD", "NZDUSD", "USDCAD", "USDCHF", "USDJPY",  # Majors
+    "AUDJPY", "CHFJPY", "EURCHF", "EURGBP", "EURJPY", "GBPJPY",  # Minors
+    "AUDCAD", "AUDCHF", "AUDNZD", "CADCHF", "CADJPY", "EURAUD", "EURCAD", "EURNZD", "GBPAUD", "GBPCAD", "GBPCHF",
+    "NZDCAD", "NZDCHF", "NZDJPY",  # Exotics
     "US30", "US500", "USTEC", "DE40", "UK100",  # Indices
     "XAUUSD", "XAGUSD", "BRENT",  # Commodities
-    "BTCUSD", "ETHUSD",  # Crypto
+    "BTCUSD", "ETHUSD", "LINKUSD", "LTCUSD", "SOLUSD", "XRPUSD",  # Crypto
 ]
 
 TIMEFRAME_ESTRUTURAL: int = TIMEFRAME_H4
