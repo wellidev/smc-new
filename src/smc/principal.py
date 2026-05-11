@@ -2,7 +2,7 @@ import hashlib
 import logging.handlers
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple
 
 import pandas as pd
@@ -21,6 +21,7 @@ from smc.analisador_smc import (
 from smc.configuracoes import (
     ATIVOS_MONITORADOS,
     CAMINHO_BANCO,
+    IDADE_MAX_EVENTO_H4,
     INTERVALO_VARREDURA_SEGUNDOS,
     LIMIAR_PAVIO,
     MENSAGEM_ALERTA,
@@ -78,6 +79,57 @@ class Confluencia(NamedTuple):
 def _gerar_id_sinal(simbolo: str, ob_id: str, fvg_id: str) -> str:
     chave = f"{simbolo}{ob_id}{fvg_id}"
     return hashlib.sha1(chave.encode()).hexdigest()[:20]
+
+
+def _gerar_id_evento(simbolo: str, tipo: str, tempo: datetime, preco: float) -> str:
+    chave = f"{simbolo}|{tipo}|{tempo.isoformat()}|{preco}"
+    return hashlib.sha1(chave.encode()).hexdigest()[:20]
+
+
+def _registrar_novos_eventos(
+    capturas: list[CapturaLiquidez],
+    quebras: list[QuebraEstrutura],
+    repo: Repositorio,
+    simbolo: str,
+) -> None:
+    for c in capturas:
+        id_ev = _gerar_id_evento(simbolo, "CAPTURA", c.tempo, c.preco_varredura)
+        if not repo.evento_ja_detectado(id_ev):
+            repo.registrar_captura(id_ev, simbolo, c.direcao, c.tempo, c.preco_varredura, c.pavio_percentual)
+
+    for b in quebras:
+        id_ev = _gerar_id_evento(simbolo, "BOS", b.tempo, b.nivel_rompido)
+        if not repo.evento_ja_detectado(id_ev):
+            repo.registrar_bos(id_ev, simbolo, b.direcao, b.nivel_rompido, b.swing_tempo, b.tempo, b.deslocamento)
+
+
+def _carregar_eventos_ativos(
+    repo: Repositorio,
+    simbolo: str,
+    cutoff: datetime,
+) -> tuple[list[CapturaLiquidez], list[QuebraEstrutura]]:
+    capturas = [
+        CapturaLiquidez(
+            simbolo=row[0],
+            direcao=row[1],
+            preco_varredura=row[2],
+            tempo=datetime.fromisoformat(row[3]).replace(tzinfo=timezone.utc),
+            pavio_percentual=row[4] or 0.0,
+        )
+        for row in repo.carregar_capturas_ativas(simbolo, cutoff)
+    ]
+    quebras = [
+        QuebraEstrutura(
+            simbolo=row[0],
+            direcao=row[1],
+            nivel_rompido=row[2],
+            swing_tempo=datetime.fromisoformat(row[3]).replace(tzinfo=timezone.utc),
+            tempo=datetime.fromisoformat(row[4]).replace(tzinfo=timezone.utc),
+            deslocamento=bool(row[5]),
+        )
+        for row in repo.carregar_quebras_ativas(simbolo, cutoff)
+    ]
+    return capturas, quebras
 
 
 def _obter_dados_mercado(
@@ -234,7 +286,10 @@ def _processar_simbolo(
         return
     velas_h4, velas_m15, velas_d1 = dados
     preco_atual = float(velas_m15.iloc[-1]["fechamento"])
-    capturas, quebras, obs, fvgs = _detectar_estrutura_h4(velas_h4, simbolo)
+    capturas_raw, quebras_raw, obs, fvgs = _detectar_estrutura_h4(velas_h4, simbolo)
+    _registrar_novos_eventos(capturas_raw, quebras_raw, repo, simbolo)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_EVENTO_H4 * 4)
+    capturas, quebras = _carregar_eventos_ativos(repo, simbolo, cutoff)
     logger.info(
         "%s | capturas=%d | BOS=%d | OBs=%d | FVGs=%d | preço=%.5f",
         simbolo, len(capturas), len(quebras), len(obs), len(fvgs), preco_atual,

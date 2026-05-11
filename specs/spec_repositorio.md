@@ -47,6 +47,28 @@ SQL e operações de banco espalhados em `principal.py` e `provedor_dados.py`, c
 
 ---
 
+### Métodos — Eventos Detectados
+
+### `evento_ja_detectado(self, id_evento: str) -> bool`
+- `SELECT 1 FROM eventos_detectados WHERE id_evento = ?`
+- Retorna `True` se o evento já foi registrado em ciclos anteriores
+
+### `registrar_captura(self, id_evento, simbolo, direcao, tempo, preco_varredura, pavio_percentual) -> None`
+- `INSERT OR IGNORE INTO eventos_detectados ...` com `tipo='CAPTURA'`
+
+### `registrar_bos(self, id_evento, simbolo, direcao, nivel_rompido, swing_tempo, tempo, deslocamento) -> None`
+- `INSERT OR IGNORE INTO eventos_detectados ...` com `tipo='BOS'`
+
+### `carregar_capturas_ativas(self, simbolo: str, cutoff: datetime) -> list[tuple]`
+- `SELECT ... WHERE simbolo=? AND tipo='CAPTURA' AND tempo_vela >= ?`
+- Retorna `(simbolo, direcao, preco, tempo_vela, pavio_percentual)` por linha
+
+### `carregar_quebras_ativas(self, simbolo: str, cutoff: datetime) -> list[tuple]`
+- `SELECT ... WHERE simbolo=? AND tipo='BOS' AND tempo_vela >= ?`
+- Retorna `(simbolo, direcao, preco, swing_tempo, tempo_vela, deslocamento)` por linha
+
+---
+
 ## Schemas SQLite
 
 ```sql
@@ -62,6 +84,19 @@ CREATE TABLE IF NOT EXISTS velas (
     PRIMARY KEY (simbolo, timeframe, tempo)
 );
 CREATE INDEX IF NOT EXISTS idx_velas_lookup ON velas (simbolo, timeframe, tempo DESC);
+
+CREATE TABLE IF NOT EXISTS eventos_detectados (
+    id_evento        TEXT PRIMARY KEY,
+    simbolo          TEXT NOT NULL,
+    tipo             TEXT NOT NULL,      -- 'CAPTURA' ou 'BOS'
+    direcao          TEXT NOT NULL,
+    tempo_vela       TEXT NOT NULL,
+    preco            REAL NOT NULL,
+    pavio_percentual REAL,               -- CAPTURA only
+    swing_tempo      TEXT,               -- BOS only
+    deslocamento     INTEGER,            -- BOS only (0/1)
+    detectado_em     TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS sinais (
     id_sinal        TEXT PRIMARY KEY,
@@ -86,3 +121,8 @@ CREATE TABLE IF NOT EXISTS sinais (
 | 3 | `INSERT OR IGNORE` | Persistir mesma vela duas vezes → sem duplicata |
 | 4 | Sinal novo | `sinal_ja_disparado` → `False`; após `persistir_sinal` → `True` |
 | 5 | `fechar` | Conexão encerrada sem erro |
+| 6 | Captura nova | `evento_ja_detectado` → `False`; após `registrar_captura` → `True` |
+| 7 | BOS novo | `evento_ja_detectado` → `False`; após `registrar_bos` → `True` |
+| 8 | Registrar mesmo evento duas vezes | sem erro (`INSERT OR IGNORE`) |
+| 9 | `carregar_capturas_ativas` | retorna apenas eventos dentro do cutoff |
+| 10 | `carregar_quebras_ativas` | retorna apenas eventos dentro do cutoff |

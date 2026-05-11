@@ -13,6 +13,8 @@ para cada símbolo em ATIVOS_MONITORADOS:
     4. detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO)
     5. detectar_quebra_estrutura(velas_h4, símbolo, PERIODO_SWING)
     6. mapear_zonas_interesse(velas_h4, símbolo)  → (obs, fvgs)
+    6a. registrar no SQLite capturas e BOS novos (via _registrar_novos_eventos)
+    6b. carregar todos os eventos ativos do SQLite dentro de IDADE_MAX_EVENTO_H4 × 4h
     7. preco_atual = velas_m15.iloc[-1].fechamento
     8. para cada captura × bos × ob × fvg:
        verificar_confluencia(captura, bos, obs, fvgs, preco_atual)
@@ -117,6 +119,19 @@ class Confluencia(NamedTuple):
 ### `_construir_mensagem(simbolo, conf, ctx) -> str`
 - Pura: desestrutura `conf` e `ctx` para preencher `MENSAGEM_ALERTA.format(...)`
 - Adiciona `timestamp` com `datetime.now(timezone.utc)`
+
+### `_gerar_id_evento(simbolo, tipo, tempo, preco) -> str`
+- `SHA1(f"{simbolo}|{tipo}|{tempo.isoformat()}|{preco}")[:20]`
+- `tipo`: `"CAPTURA"` ou `"BOS"`
+
+### `_registrar_novos_eventos(capturas, quebras, repo, simbolo) -> None`
+- Para cada captura/quebra: gera id, chama `evento_ja_detectado`; se novo, chama `registrar_captura`/`registrar_bos`
+- Sem retorno — efeito colateral puro no banco
+
+### `_carregar_eventos_ativos(repo, simbolo, cutoff) -> tuple[list[CapturaLiquidez], list[QuebraEstrutura]]`
+- Chama `repo.carregar_capturas_ativas` e `repo.carregar_quebras_ativas`
+- Reconstrói os dataclasses a partir das tuplas retornadas pelo repositório
+- `cutoff = now - IDADE_MAX_EVENTO_H4 * 4h`
 
 ### `_processar_confluencia(simbolo, conf, preco_atual, velas_d1, repo, notificador) -> None`
 - Gera `id_sinal` via SHA1, verifica dedup, chama `_calcular_contexto` + `_construir_mensagem`

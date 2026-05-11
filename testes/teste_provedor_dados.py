@@ -106,3 +106,49 @@ class TestCacheIncremental:
         with patch("MetaTrader5.copy_rates_from_pos", return_value=None):
             resultado = provedor.obter_velas("INVALIDO", 16408, 100)
         assert resultado is None
+
+
+class TestEventosDetectados:
+    _T = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_evento_novo_retorna_false(self):
+        repo = _criar_repo_memoria()
+        assert repo.evento_ja_detectado("id_qualquer") is False
+
+    def test_registrar_captura_retorna_true(self):
+        repo = _criar_repo_memoria()
+        repo.registrar_captura("ev1", "EURUSD", "ALTA", self._T, 1.1050, 0.45)
+        assert repo.evento_ja_detectado("ev1") is True
+
+    def test_registrar_bos_retorna_true(self):
+        repo = _criar_repo_memoria()
+        repo.registrar_bos("ev2", "USDCHF", "ALTA", 0.7768, self._T, self._T, True)
+        assert repo.evento_ja_detectado("ev2") is True
+
+    def test_registrar_mesmo_evento_duas_vezes_sem_erro(self):
+        repo = _criar_repo_memoria()
+        repo.registrar_captura("ev3", "EURUSD", "ALTA", self._T, 1.1050, 0.45)
+        repo.registrar_captura("ev3", "EURUSD", "ALTA", self._T, 1.1050, 0.45)
+        assert repo.evento_ja_detectado("ev3") is True
+
+    def test_carregar_capturas_ativas_filtra_cutoff(self):
+        from datetime import timedelta
+        repo = _criar_repo_memoria()
+        t_antigo = self._T - timedelta(hours=100)
+        repo.registrar_captura("ev_rec", "EURUSD", "ALTA", self._T, 1.1050, 0.45)
+        repo.registrar_captura("ev_ant", "EURUSD", "ALTA", t_antigo, 1.0900, 0.32)
+        cutoff = self._T - timedelta(hours=50)
+        resultado = repo.carregar_capturas_ativas("EURUSD", cutoff)
+        assert len(resultado) == 1
+        assert resultado[0][2] == 1.1050
+
+    def test_carregar_quebras_ativas_filtra_cutoff(self):
+        from datetime import timedelta
+        repo = _criar_repo_memoria()
+        t_antigo = self._T - timedelta(hours=100)
+        repo.registrar_bos("bos_rec", "EURUSD", "ALTA", 1.1000, self._T, self._T, False)
+        repo.registrar_bos("bos_ant", "EURUSD", "ALTA", 1.0800, t_antigo, t_antigo, True)
+        cutoff = self._T - timedelta(hours=50)
+        resultado = repo.carregar_quebras_ativas("EURUSD", cutoff)
+        assert len(resultado) == 1
+        assert resultado[0][2] == 1.1000
