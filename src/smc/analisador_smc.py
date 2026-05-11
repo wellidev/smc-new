@@ -338,7 +338,7 @@ def _detectar_fvgs(velas: pd.DataFrame, simbolo: str) -> list[FairValueGap]:
     for i in range(inicio, len(velas) - 2):
         v0 = velas.iloc[i]
         v2 = velas.iloc[i + 2]
-        tempo_fvg = _tempo_da_vela(velas.iloc[i + 1])
+        tempo_fvg = _tempo_da_vela(velas.iloc[i + 2])
 
         if float(v0["maxima"]) < float(v2["minima"]):
             fvgs.append(FairValueGap(

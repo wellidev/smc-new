@@ -20,15 +20,23 @@ _SEGUNDOS_POR_TIMEFRAME: dict[int, int] = {
 
 
 def _detectar_offset_servidor(mt5) -> int:
-    # 1. Obter o último tick de um ativo líquido (ex: EURUSD)
+    # 1. Pega o último tick (tempo do servidor)
     tick = mt5.symbol_info_tick("EURUSD")
-    server_time = datetime.fromtimestamp(tick.time, tz=timezone.utc)
+    if tick is None:
+        return 0
 
-    # 2. Obter o horário UTC atual do sistema
+    # 2. Transforma o timestamp bruto em um objeto UTC "falso" (apenas para cálculo)
+    # Isso representa que horas são no servidor agora.
+    server_now = datetime.fromtimestamp(tick.time, tz=timezone.utc)
+
+    # 3. Pega o UTC real do mundo
     utc_now = datetime.now(timezone.utc)
 
-    # 3. Calcular a diferença aproximada (arredonde para a hora inteira)
-    return round((server_time - utc_now).total_seconds())
+    # 4. A diferença nos dá o offset em horas (ex: 3.0 ou 2.0)
+    diff_hours = (server_now - utc_now).total_seconds() / 3600
+
+    # Arredonda para o inteiro mais próximo (ex: 2.98 -> 3)
+    return round(diff_hours)
 
 
 class ProvedorDados:
@@ -55,7 +63,7 @@ class ProvedorDados:
                 return False
             self._mt5_conectado = True
             self._offset_servidor = _detectar_offset_servidor(mt5)
-            logger.info("MT5 conectado com sucesso. Offset do servidor: %ds", self._offset_servidor)
+            logger.info("MT5 conectado com sucesso. Offset do servidor: %dh", self._offset_servidor)
             return True
         except Exception as exc:
             logger.error("Exceção ao conectar ao MT5: %s", exc)
@@ -111,8 +119,9 @@ class ProvedorDados:
 
 def _converter_registros(simbolo: str, timeframe: int, registros, offset: int = 0) -> list[tuple]:
     linhas = []
+    offset_broker = offset * 3600
     for r in registros:
-        tempo_utc = datetime.fromtimestamp(r["time"] - offset, tz=timezone.utc).isoformat()
+        tempo_utc = datetime.fromtimestamp(r["time"] - offset_broker, tz=timezone.utc).isoformat()
         volume = int(r["real_volume"] or r["tick_volume"])
         linhas.append((simbolo, timeframe, tempo_utc, float(r["open"]), float(r["high"]),
                        float(r["low"]), float(r["close"]), volume))

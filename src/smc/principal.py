@@ -53,8 +53,8 @@ _handlers: list[logging.Handler] = [_console_handler]
 if _nivel == logging.DEBUG:
     _caminho_log = os.getenv("SMC_LOG_FILE", os.path.join("logs", "smc_debug.log"))
     os.makedirs(os.path.dirname(_caminho_log) or ".", exist_ok=True)
-    _file_handler = logging.handlers.RotatingFileHandler(
-        _caminho_log, maxBytes=10 * 1024 * 1024, backupCount=10, encoding="utf-8"
+    _file_handler = logging.handlers.TimedRotatingFileHandler(
+        _caminho_log, when="midnight", backupCount=30, encoding="utf-8"
     )
     _file_handler.setLevel(logging.DEBUG)
     _handlers.append(_file_handler)
