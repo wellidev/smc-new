@@ -42,6 +42,11 @@ _SQL_CRIAR_EVENTOS = """
 
 _SQL_EVENTO_EXISTE = "SELECT 1 FROM eventos_detectados WHERE id_evento = ?"
 
+_SQL_CAPTURA_VELA_EXISTE = """
+    SELECT 1 FROM eventos_detectados
+    WHERE simbolo = ? AND tipo = 'CAPTURA' AND direcao = ? AND tempo_vela = ?
+"""
+
 _SQL_REGISTRAR_CAPTURA = """
                          INSERT OR IGNORE INTO eventos_detectados
                          (id_evento, simbolo, tipo, direcao, tempo_vela, preco, pavio_percentual, detectado_em)
@@ -152,6 +157,10 @@ class Repositorio:
 
     def evento_ja_detectado(self, id_evento: str) -> bool:
         cursor = self._conn.execute(_SQL_EVENTO_EXISTE, (id_evento,))
+        return cursor.fetchone() is not None
+
+    def captura_ja_registrada_para_vela(self, simbolo: str, direcao: str, tempo: datetime) -> bool:
+        cursor = self._conn.execute(_SQL_CAPTURA_VELA_EXISTE, (simbolo, direcao, tempo.isoformat()))
         return cursor.fetchone() is not None
 
     def registrar_captura(

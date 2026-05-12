@@ -94,7 +94,7 @@ def _registrar_novos_eventos(
 ) -> None:
     for c in capturas:
         id_ev = _gerar_id_evento(simbolo, "CAPTURA", c.tempo, c.preco_varredura)
-        if not repo.evento_ja_detectado(id_ev):
+        if not repo.evento_ja_detectado(id_ev) and not repo.captura_ja_registrada_para_vela(simbolo, c.direcao, c.tempo):
             repo.registrar_captura(id_ev, simbolo, c.direcao, c.tempo, c.preco_varredura, c.pavio_percentual)
 
     for b in quebras:
@@ -174,11 +174,15 @@ def _encontrar_confluencias(
             if not verificar_confluencia(captura, bos, obs, fvgs, preco_atual):
                 continue
             for ob in obs:
+                if ob.mitigado:
+                    continue
                 if ob.direcao != captura.direcao:
                     continue
                 if ob.tempo >= captura.tempo:
                     continue
                 for fvg in fvgs:
+                    if fvg.mitigado:
+                        continue
                     if fvg.direcao != captura.direcao:
                         continue
                     if fvg.tempo >= captura.tempo:
