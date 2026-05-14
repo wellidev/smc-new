@@ -390,49 +390,49 @@ class TestVerificarConfluencia:
         assert verificar_confluencia(
             self._captura("BAIXA"), self._bos("BAIXA"),
             [self._ob("BAIXA")], [self._fvg("BAIXA")],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is True
 
     def test_confluencia_completa_alta(self):
         assert verificar_confluencia(
             self._captura("ALTA"), self._bos("ALTA"),
             [self._ob("ALTA")], [self._fvg("ALTA")],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is True
 
     def test_sem_captura(self):
         assert verificar_confluencia(
             None, self._bos("BAIXA"),
             [self._ob("BAIXA")], [self._fvg("BAIXA")],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is False
 
     def test_sem_bos(self):
         assert verificar_confluencia(
             self._captura("BAIXA"), None,
             [self._ob("BAIXA")], [self._fvg("BAIXA")],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is False
 
     def test_bos_direcao_errada(self):
         assert verificar_confluencia(
             self._captura("BAIXA"), self._bos("ALTA"),
             [self._ob("BAIXA")], [self._fvg("BAIXA")],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is False
 
     def test_ob_mitigado(self):
         assert verificar_confluencia(
             self._captura("BAIXA"), self._bos("BAIXA"),
             [self._ob("BAIXA", mitigado=True)], [self._fvg("BAIXA")],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is False
 
     def test_preco_fora_do_ob(self):
         assert verificar_confluencia(
             self._captura("BAIXA"), self._bos("BAIXA"),
             [self._ob("BAIXA")], [self._fvg("BAIXA")],
-            preco_atual_m15=1.1200,  # fora da zona [1.1000-1.1050]
+            preco_atual_m5=1.1200,  # fora da zona [1.1000-1.1050]
         ) is False
 
     def test_sem_fvg_sobreposto(self):
@@ -444,7 +444,7 @@ class TestVerificarConfluencia:
         assert verificar_confluencia(
             self._captura("BAIXA"), self._bos("BAIXA"),
             [self._ob("BAIXA")], [fvg_longe],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is False
 
     def test_preco_em_ob_mas_fora_da_sobreposicao(self):
@@ -466,7 +466,7 @@ class TestVerificarConfluencia:
         assert verificar_confluencia(
             self._captura("BAIXA"), self._bos("BAIXA"),
             [ob], [fvg],
-            preco_atual_m15=1.1010,
+            preco_atual_m5=1.1010,
         ) is True
 
     def test_ob_pos_captura_aceito(self):
@@ -481,7 +481,7 @@ class TestVerificarConfluencia:
         assert verificar_confluencia(
             self._captura("BAIXA"), self._bos("BAIXA"),
             [ob_tardio], [self._fvg("BAIXA")],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is True
 
     def test_bos_com_swing_pre_captura_aceito(self):
@@ -496,7 +496,7 @@ class TestVerificarConfluencia:
         assert verificar_confluencia(
             self._captura("BAIXA"), bos_swing_antigo,
             [self._ob("BAIXA")], [self._fvg("BAIXA")],
-            preco_atual_m15=1.1025,
+            preco_atual_m5=1.1025,
         ) is True
 
 

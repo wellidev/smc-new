@@ -6,10 +6,12 @@ try:
     import MetaTrader5 as mt5
 
     TIMEFRAME_H4 = mt5.TIMEFRAME_H4
+    TIMEFRAME_M5 = mt5.TIMEFRAME_M5
     TIMEFRAME_M15 = mt5.TIMEFRAME_M15
     TIMEFRAME_D1 = mt5.TIMEFRAME_D1
 except ImportError:
     TIMEFRAME_H4 = 16388
+    TIMEFRAME_M5 = 5
     TIMEFRAME_M15 = 15
     TIMEFRAME_D1 = 16408
 
@@ -26,7 +28,7 @@ ATIVOS_MONITORADOS: list[str] = [
 ]
 
 TIMEFRAME_ESTRUTURAL: int = TIMEFRAME_H4
-TIMEFRAME_GATILHO: int = TIMEFRAME_M15
+TIMEFRAME_GATILHO: int = TIMEFRAME_M5
 
 VELAS_HISTORICO: int = 500
 VELAS_D1_HISTORICO: int = 50
@@ -54,7 +56,7 @@ INTERVALO_VARREDURA_SEGUNDOS: int = 60
 
 MENSAGEM_ALERTA: str = (
     "🚨 <b>SINAL SMC — {simbolo}</b>\n"
-    "📊 Timeframe: H4 (zona) + M15 (gatilho)\n"
+    "📊 Timeframe: H4 (zona) + M5 (gatilho, fechamento confirmado)\n"
     "📍 Captura de Liquidez: {direcao_captura} @ {preco_varredura:.5f}\n"
     "🔨 BOS ({bos_qualidade}): {direcao_bos} @ {nivel_bos:.5f}\n"
     "🟦 Order Block ({ob_qualidade}): {ob_fundo:.5f} – {ob_topo:.5f}\n"

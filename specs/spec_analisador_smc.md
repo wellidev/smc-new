@@ -154,18 +154,18 @@ Requer `i + 1 < len(velas)` — se não existir candle à direita, `deslocamento
 
 ---
 
-### `verificar_confluencia(captura, quebra_estrutura, order_blocks, fvgs, preco_atual_m15) -> bool`
+### `verificar_confluencia(captura, quebra_estrutura, order_blocks, fvgs, preco_atual_m5) -> bool`
 
 **Retorna `True` se TODAS as condições forem satisfeitas:**
 1. `captura` não é None
 2. `quebra_estrutura` não é None e na **mesma direção** que a captura
 3. `quebra_estrutura.tempo > captura.tempo` — BOS deve ser estritamente posterior à captura
-4. Existe um par (OB, FVG) com mesma direção, não mitigados, que se sobrepõem geometricamente, **e `preco_atual_m15` está dentro do OB** (não é exigido que esteja na zona OB∩FVG)
+4. Existe um par (OB, FVG) com mesma direção, não mitigados, que se sobrepõem geometricamente, **e `preco_atual_m5` está dentro do OB** (não é exigido que esteja na zona OB∩FVG)
 
 **Critério de sobreposição e zona de entrada:**
 ```
 sobreposição = max(ob.preco_fundo, fvg.preco_fundo) < min(ob.preco_topo, fvg.preco_topo)
-entrada válida = ob.preco_fundo <= preco_atual_m15 <= ob.preco_topo
+entrada válida = ob.preco_fundo <= preco_atual_m5 <= ob.preco_topo
 ```
 
 A sobreposição OB∩FVG é calculada e reportada na mensagem Telegram como informação de contexto, mas não é exigida como condição de entrada. Basta o preço estar dentro do OB que contém pelo menos um FVG sobreposto.

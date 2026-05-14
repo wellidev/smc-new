@@ -140,8 +140,8 @@ def _obter_dados_mercado(
         logger.warning("Dados insuficientes para %s no H4.", simbolo)
         return None
 
-    velas_m15 = provedor.obter_velas(simbolo, TIMEFRAME_GATILHO, 50)
-    if velas_m15 is None or len(velas_m15) == 0:
+    velas_m5 = provedor.obter_velas(simbolo, TIMEFRAME_GATILHO, 50)
+    if velas_m5 is None or len(velas_m5) == 0:
         logger.warning("Dados insuficientes para %s no M15.", simbolo)
         return None
 
@@ -149,7 +149,7 @@ def _obter_dados_mercado(
     if velas_d1 is None:
         logger.debug("D1 indisponível para %s — filtros contextuais desativados.", simbolo)
 
-    return velas_h4, velas_m15, velas_d1
+    return velas_h4, velas_m5, velas_d1
 
 
 def _detectar_estrutura_h4(
@@ -284,8 +284,8 @@ def _processar_simbolo(
     dados = _obter_dados_mercado(simbolo, provedor)
     if dados is None:
         return
-    velas_h4, velas_m15, velas_d1 = dados
-    preco_atual = float(velas_m15.iloc[-1]["fechamento"])
+    velas_h4, velas_m5, velas_d1 = dados
+    preco_atual = float(velas_m5.iloc[-1]["fechamento"])
     capturas_raw, quebras_raw, obs, fvgs = _detectar_estrutura_h4(velas_h4, simbolo)
     _registrar_novos_eventos(capturas_raw, quebras_raw, repo, simbolo)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_EVENTO_H4 * 4)

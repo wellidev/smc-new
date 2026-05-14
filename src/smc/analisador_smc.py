@@ -192,7 +192,7 @@ def verificar_confluencia(
     quebra_estrutura: QuebraEstrutura | None,
     order_blocks: list[OrderBlock],
     fvgs: list[FairValueGap],
-    preco_atual_m15: float,
+    preco_atual_m5: float,
 ) -> bool:
     if captura is None or quebra_estrutura is None:
         return False
@@ -219,7 +219,7 @@ def verificar_confluencia(
         for fvg in fvgs_validos:
             if not _zonas_sobrepoem(ob, fvg):
                 continue
-            if ob.preco_fundo <= preco_atual_m15 <= ob.preco_topo:
+            if ob.preco_fundo <= preco_atual_m5 <= ob.preco_topo:
                 logger.info(
                     "Confluência SMC detectada: captura=%s BOS=%s OB=[%.5f-%.5f]%s FVG=[%.5f-%.5f]%s "
                     "overlap=[%.5f-%.5f] preço=%.5f",
@@ -228,14 +228,14 @@ def verificar_confluencia(
                     " [TESTADO]" if ob.testado else "",
                     fvg.preco_fundo, fvg.preco_topo,
                     " [TESTADO]" if fvg.testado else "",
-                    max(ob.preco_fundo, fvg.preco_fundo), min(ob.preco_topo, fvg.preco_topo), preco_atual_m15,
+                    max(ob.preco_fundo, fvg.preco_fundo), min(ob.preco_topo, fvg.preco_topo), preco_atual_m5,
                 )
                 return True
 
     logger.debug(
         "Confluência rejeitada: nenhum OB %s com FVG sobreposto contendo preço=%.5f dentro do OB "
         "(OBs válidos=%d, FVGs válidos=%d)",
-        direcao, preco_atual_m15, len(obs_validos), len(fvgs_validos),
+        direcao, preco_atual_m5, len(obs_validos), len(fvgs_validos),
     )
     return False
 
