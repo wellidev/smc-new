@@ -160,22 +160,21 @@ Requer `i + 1 < len(velas)` — se não existir candle à direita, `deslocamento
 1. `captura` não é None
 2. `quebra_estrutura` não é None e na **mesma direção** que a captura
 3. `quebra_estrutura.tempo > captura.tempo` — BOS deve ser estritamente posterior à captura
-4. `quebra_estrutura.swing_tempo > captura.tempo` — o swing rompido pelo BOS deve ter sido formado **depois** da captura (garante que o BOS confirma uma nova estrutura criada pelo impulso pós-manipulação, não estrutura pré-existente)
-5. Existe um par (OB, FVG) onde ambos têm `tempo < captura.tempo`, mesma direção, não estão mitigados, se sobrepõem geometricamente, **e `preco_atual_m15` está dentro da zona de sobreposição OB ∩ FVG** — não apenas dentro do OB
+4. Existe um par (OB, FVG) com mesma direção, não mitigados, que se sobrepõem geometricamente, **e `preco_atual_m15` está dentro do OB** (não é exigido que esteja na zona OB∩FVG)
 
 **Critério de sobreposição e zona de entrada:**
 ```
 sobreposição = max(ob.preco_fundo, fvg.preco_fundo) < min(ob.preco_topo, fvg.preco_topo)
-overlap_fundo = max(ob.preco_fundo, fvg.preco_fundo)
-overlap_topo  = min(ob.preco_topo,  fvg.preco_topo)
-entrada válida = overlap_fundo <= preco_atual_m15 <= overlap_topo
+entrada válida = ob.preco_fundo <= preco_atual_m15 <= ob.preco_topo
 ```
 
-A exigência de que o preço esteja na sobreposição (não apenas no OB) garante que o sinal só dispara quando o preço testa o POI de maior confluência — onde a zona de oferta/demanda (OB) e o desequilíbrio (FVG) se sobrepõem simultaneamente.
+A sobreposição OB∩FVG é calculada e reportada na mensagem Telegram como informação de contexto, mas não é exigida como condição de entrada. Basta o preço estar dentro do OB que contém pelo menos um FVG sobreposto.
 
-**Cadeia causal SMC obrigatória:**
+OBs e FVGs podem ter `tempo` anterior ou posterior à captura — o impulso pós-captura frequentemente cria novos OBs (breaker blocks) que são POIs muito relevantes para o retorno.
+
+**Cadeia causal SMC:**
 ```
-OB (pré-captura) → Captura de Liquidez → Impulso → Swing formado → BOS (swing_tempo > captura) → Retorno ao OB∩FVG
+Captura de Liquidez → BOS (posterior à captura) → Retorno ao OB com FVG sobreposto
 ```
 
 **Lógica direcional:**
@@ -207,9 +206,9 @@ Sinal BAIXA: captura="BAIXA" + bos="BAIXA" + ob="BAIXA" + preço dentro do OB be
 | 17 | Open candle excluído de swing | Último candle tem maxima extrema | índice `len-1` não está em `swings_high` |
 | 18 | `simbolo` propagado em captura | `simbolo="EURUSD"` passado como argumento | `captura.simbolo == "EURUSD"` |
 | 19 | OB "última vela" — rejeita penúltima bearish | Duas velas bearish consecutivas antes do impulso bullish | somente o OB da 2ª vela bearish (imediatamente antes do impulso) é retornado |
-| 20 | OB pós-captura ignorado em confluência | OB com `tempo >= captura.tempo` | `verificar_confluencia` retorna `False` |
-| 21 | BOS com swing pré-captura ignorado | `quebra_estrutura.swing_tempo <= captura.tempo` | `verificar_confluencia` retorna `False` |
-| 22 | Preço em OB mas fora da sobreposição | OB [1.1000-1.1060], FVG [1.1035-1.1080], preço=1.1010 | `verificar_confluencia` retorna `False` (preço fora do overlap [1.1035-1.1060]) |
+| 20 | OB pós-captura aceito em confluência | OB com `tempo >= captura.tempo` (impulso pós-captura) | `verificar_confluencia` retorna `True` |
+| 21 | BOS com swing pré-captura aceito | `quebra_estrutura.swing_tempo <= captura.tempo` | `verificar_confluencia` retorna `True` (apenas `bos.tempo > captura.tempo` é exigido) |
+| 22 | Preço em OB mas fora da sobreposição | OB [1.1000-1.1060], FVG [1.1035-1.1080], preço=1.1010 | `verificar_confluencia` retorna `True` (preço dentro do OB é suficiente) |
 | 23 | OB virgem — nenhum retorno | ALTA OB + impulso acima, sem retrace | `ob.testado = False` |
 | 24 | OB testado — wick de retrace | ALTA OB + candle abre acima do topo, wick entra na zona | `ob.testado = True` |
 | 25 | Impulso não marca como testado | Candles do impulso abrem abaixo do topo do OB | `ob.testado = False` |

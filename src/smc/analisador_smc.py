@@ -211,24 +211,15 @@ def verificar_confluencia(
         )
         return False
 
-    if quebra_estrutura.swing_tempo <= captura.tempo:
-        logger.debug(
-            "Confluência rejeitada: swing do BOS (%s) não é posterior à captura (%s)",
-            quebra_estrutura.swing_tempo, captura.tempo,
-        )
-        return False
-
     direcao = captura.direcao
-    obs_validos = [o for o in order_blocks if not o.mitigado and o.direcao == direcao and o.tempo < captura.tempo]
-    fvgs_validos = [f for f in fvgs if not f.mitigado and f.direcao == direcao and f.tempo < captura.tempo]
+    obs_validos = [o for o in order_blocks if not o.mitigado and o.direcao == direcao]
+    fvgs_validos = [f for f in fvgs if not f.mitigado and f.direcao == direcao]
 
     for ob in obs_validos:
         for fvg in fvgs_validos:
             if not _zonas_sobrepoem(ob, fvg):
                 continue
-            overlap_fundo = max(ob.preco_fundo, fvg.preco_fundo)
-            overlap_topo  = min(ob.preco_topo,  fvg.preco_topo)
-            if overlap_fundo <= preco_atual_m15 <= overlap_topo:
+            if ob.preco_fundo <= preco_atual_m15 <= ob.preco_topo:
                 logger.info(
                     "Confluência SMC detectada: captura=%s BOS=%s OB=[%.5f-%.5f]%s FVG=[%.5f-%.5f]%s "
                     "overlap=[%.5f-%.5f] preço=%.5f",
@@ -237,12 +228,12 @@ def verificar_confluencia(
                     " [TESTADO]" if ob.testado else "",
                     fvg.preco_fundo, fvg.preco_topo,
                     " [TESTADO]" if fvg.testado else "",
-                    overlap_fundo, overlap_topo, preco_atual_m15,
+                    max(ob.preco_fundo, fvg.preco_fundo), min(ob.preco_topo, fvg.preco_topo), preco_atual_m15,
                 )
                 return True
 
     logger.debug(
-        "Confluência rejeitada: nenhum OB %s com FVG sobreposto contendo preço=%.5f na zona de sobreposição "
+        "Confluência rejeitada: nenhum OB %s com FVG sobreposto contendo preço=%.5f dentro do OB "
         "(OBs válidos=%d, FVGs válidos=%d)",
         direcao, preco_atual_m15, len(obs_validos), len(fvgs_validos),
     )

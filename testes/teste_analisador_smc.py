@@ -448,8 +448,9 @@ class TestVerificarConfluencia:
         ) is False
 
     def test_preco_em_ob_mas_fora_da_sobreposicao(self):
-        # Cenário 22: OB [1.1000, 1.1060], FVG [1.1035, 1.1080]
-        # Sobreposição = [1.1035, 1.1060]; preço=1.1010 → dentro do OB, fora da sobreposição
+        # Cenário 22 (revisado): preço dentro do OB é suficiente para confluência,
+        # mesmo que esteja fora da zona de sobreposição OB∩FVG.
+        # OB [1.1000, 1.1060], FVG [1.1035, 1.1080], preço=1.1010 → dentro do OB
         ob = OrderBlock(
             id="ob_p", simbolo="EURUSD", direcao="BAIXA",
             preco_topo=1.1060, preco_fundo=1.1000,
@@ -466,10 +467,11 @@ class TestVerificarConfluencia:
             self._captura("BAIXA"), self._bos("BAIXA"),
             [ob], [fvg],
             preco_atual_m15=1.1010,
-        ) is False
+        ) is True
 
-    def test_ob_pos_captura_ignorado(self):
-        # Cenário 20: OB formado depois da captura não deve gerar confluência.
+    def test_ob_pos_captura_aceito(self):
+        # Cenário 20 (revisado): OB formado depois da captura é válido —
+        # OBs do impulso pós-captura são os POIs mais relevantes para retorno.
         ob_tardio = OrderBlock(
             id="ob_tardio", simbolo="EURUSD", direcao="BAIXA",
             preco_topo=1.1050, preco_fundo=1.1000,
@@ -480,11 +482,11 @@ class TestVerificarConfluencia:
             self._captura("BAIXA"), self._bos("BAIXA"),
             [ob_tardio], [self._fvg("BAIXA")],
             preco_atual_m15=1.1025,
-        ) is False
+        ) is True
 
-    def test_bos_com_swing_pre_captura_rejeitado(self):
-        # Cenário 21: swing_tempo anterior à captura → BOS confirma estrutura
-        # pré-existente, não a nova estrutura criada pelo impulso pós-manipulação.
+    def test_bos_com_swing_pre_captura_aceito(self):
+        # Cenário 21 (revisado): swing_tempo anterior à captura ainda é válido —
+        # o BOS deve ser posterior à captura, mas o swing rompido pode ser pré-existente.
         bos_swing_antigo = QuebraEstrutura(
             simbolo="EURUSD", direcao="BAIXA",
             nivel_rompido=1.1100,
@@ -495,7 +497,7 @@ class TestVerificarConfluencia:
             self._captura("BAIXA"), bos_swing_antigo,
             [self._ob("BAIXA")], [self._fvg("BAIXA")],
             preco_atual_m15=1.1025,
-        ) is False
+        ) is True
 
 
 # ---------------------------------------------------------------------------

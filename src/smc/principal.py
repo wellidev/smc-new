@@ -178,21 +178,17 @@ def _encontrar_confluencias(
                     continue
                 if ob.direcao != captura.direcao:
                     continue
-                if ob.tempo >= captura.tempo:
-                    continue
                 for fvg in fvgs:
                     if fvg.mitigado:
                         continue
                     if fvg.direcao != captura.direcao:
                         continue
-                    if fvg.tempo >= captura.tempo:
-                        continue
                     if not _zonas_sobrepoem(ob, fvg):
+                        continue
+                    if not (ob.preco_fundo <= preco_atual <= ob.preco_topo):
                         continue
                     overlap_fundo = max(ob.preco_fundo, fvg.preco_fundo)
                     overlap_topo = min(ob.preco_topo, fvg.preco_topo)
-                    if not (overlap_fundo <= preco_atual <= overlap_topo):
-                        continue
                     resultado.append(Confluencia(captura, bos, ob, fvg, overlap_fundo, overlap_topo))
     return resultado
 

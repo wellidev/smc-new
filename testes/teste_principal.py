@@ -69,8 +69,8 @@ class TestEncontrarConfluencias:
         assert result[0].overlap_fundo == pytest.approx(1.1010)
         assert result[0].overlap_topo == pytest.approx(1.1050)
 
-    def test_preco_fora_da_sobreposicao_retorna_vazio(self):
-        # P2: preço 1.1100 > overlap_topo 1.1050
+    def test_preco_fora_do_ob_retorna_vazio(self):
+        # P2: preço 1.1100 > ob.preco_topo 1.1060 → fora do OB
         result = self._run(_captura(), _bos(), _ob(), _fvg(), preco_atual=1.1100)
         assert result == []
 
@@ -79,10 +79,10 @@ class TestEncontrarConfluencias:
         result = self._run(_captura("ALTA"), _bos("ALTA"), _ob("BAIXA"), _fvg("ALTA"), preco_atual=1.1030)
         assert result == []
 
-    def test_ob_posterior_a_captura_retorna_vazio(self):
-        # P4: ob.tempo == _T1 >= captura.tempo == _T1
+    def test_ob_posterior_a_captura_aceito(self):
+        # P4 (revisado): OBs formados após a captura são válidos (impulso pós-captura)
         result = self._run(_captura(), _bos(), _ob(tempo=_T1), _fvg(), preco_atual=1.1030)
-        assert result == []
+        assert len(result) == 1
 
 
 # ---------------------------------------------------------------------------
