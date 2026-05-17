@@ -187,6 +187,91 @@ Sinal ALTA:  captura="ALTA" + bos="ALTA" + ob="ALTA" + preço dentro do OB bulli
 Sinal BAIXA: captura="BAIXA" + bos="BAIXA" + ob="BAIXA" + preço dentro do OB bearish
 ```
 
+---
+
+### `calcular_swings_confirmados(velas, periodo) -> list[SwingPoint]`
+
+Variante simétrica estrita de `calcular_swings`. Retorna `list[SwingPoint]` (ver `modelos.py`).
+
+**Diferença de `calcular_swings`:** Requer exatamente `periodo` candles confirmados à esquerda E à direita — sem janela assimétrica. Um swing em `i` só é confirmado se `i >= periodo` AND `i + periodo <= len - 2` (a última vela open nunca entra). Atrasa a confirmação em `periodo` barras, mas produz swings mais confiáveis.
+
+**Uso:** `detectar_eventos_estrutura` (state machine), `extrair_legs`. Não substitui `calcular_swings` nas detecções de captura/BOS de borda.
+
+---
+
+### `calcular_atr(velas, periodo=14) -> float`
+
+ATR de Wilder sobre velas fechadas (`velas.iloc[:-1]`). Retorna `0.0` se `len(velas) < periodo + 1`.
+
+```
+TR[i] = max(high[i]-low[i], |high[i]-close[i-1]|, |low[i]-close[i-1]|)
+ATR inicial = média simples dos primeiros `periodo` TRs
+ATR[i] = (ATR[i-1] * (periodo-1) + TR[i]) / periodo
+```
+
+---
+
+### `detectar_eventos_estrutura(velas, simbolo, periodo_swing) -> list[EventoEstrutura]`
+
+Máquina de estados HH/HL/LH/LL. Ver `specs/spec_estrutura.md` para algoritmo completo.
+
+- Usa `calcular_swings_confirmados` (janela simétrica)
+- Retorna `EventoEstrutura` (de `modelos.py`) com `tipo` = "ChoCH" | "BOS"
+- ChoCH: quebra CONTRA a tendência; BOS: quebra NA direção da tendência
+
+---
+
+### `extrair_legs(velas, eventos, simbolo, periodo_swing, atr) -> list[LegImpulso]`
+
+Para cada `EventoEstrutura`, extrai o trecho direcional que causou o evento. Ver `specs/spec_legs.md`.
+
+- `eh_displacement = atr_multiplo >= 2.0 AND proporcao_corpo >= 0.60 AND tem_fvg_interno`
+- Deduplicação por par `(indice_inicio, indice_fim)`
+
+---
+
+### `detectar_obs_corpo(velas, leg, simbolo) -> list[OrderBlockV2]`
+
+Order Blocks usando corpo (open/close), vinculados à leg. Ver `specs/spec_legs.md`.
+
+---
+
+### `extrair_fvgs_no_intervalo(velas, indice_inicio, indice_fim, simbolo) -> list[FairValueGap]`
+
+FVGs dentro do intervalo de índices. Retorna sem verificar mitigação.
+
+---
+
+### `calcular_poi_composta(obs, fvgs, fallback_nivel) -> tuple[float, float]`
+
+Envelope da POI: `(min(preco_fundo), max(preco_topo))` de todos os OBs v2 e FVGs ativos. Fallback ao nível do evento se não há POIs.
+
+---
+
+### `detectar_eqh_eql(velas, simbolo, atr) -> list[PoolLiquidez]`
+
+EQH/EQL: clusters de ≥ 2 wicks dentro de `0.1 × ATR`. Janela: últimas 50 velas fechadas. Ver `specs/spec_pools.md`.
+
+---
+
+### `detectar_pdh_pdl(velas_d1, simbolo, atr) -> list[PoolLiquidez]`
+
+PDH/PDL do dia anterior (D1). Retorna `[]` se `velas_d1 is None` ou `len < 2`.
+
+---
+
+### `detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo) -> ConfirmacaoEntrada | None`
+
+MSS (ChoCH no M5) dentro da POI. Ver `specs/spec_setup.md`.
+
+---
+
+### `calcular_score_setup(evento, leg, pool, velas_d1, atr, **flags) -> int`
+
+Score composicional 0–90. Ver `specs/spec_setup.md` para tabela de pontos.
+
+---
+
 ## Cenários de Teste
 
 | # | Cenário | Entrada | Saída esperada |

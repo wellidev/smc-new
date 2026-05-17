@@ -120,6 +120,60 @@ _SQL_INSERIR_SINAL = """
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                      """
 
+_SQL_CRIAR_SETUPS = """
+CREATE TABLE IF NOT EXISTS setups (
+    id              TEXT PRIMARY KEY,
+    simbolo         TEXT NOT NULL,
+    direcao         TEXT NOT NULL,
+    pool_id         TEXT NOT NULL,
+    evento_tipo     TEXT NOT NULL,
+    evento_tempo    TEXT NOT NULL,
+    evento_nivel    REAL NOT NULL,
+    leg_id          TEXT,
+    poi_fundo       REAL NOT NULL,
+    poi_topo        REAL NOT NULL,
+    score           INTEGER NOT NULL,
+    ativo           INTEGER NOT NULL DEFAULT 1,
+    criado_em       TEXT NOT NULL
+);
+"""
+
+_SQL_CRIAR_CONFIRMACOES = """
+CREATE TABLE IF NOT EXISTS confirmacoes (
+    id                  TEXT PRIMARY KEY,
+    setup_id            TEXT NOT NULL,
+    simbolo             TEXT NOT NULL,
+    tipo_confirmacao    TEXT NOT NULL,
+    preco_confirmacao   REAL NOT NULL,
+    tempo               TEXT NOT NULL,
+    sl                  REAL NOT NULL,
+    tp                  REAL NOT NULL,
+    rr                  REAL NOT NULL
+);
+"""
+
+_SQL_SETUP_EXISTE = "SELECT 1 FROM setups WHERE id = ?"
+_SQL_INSERIR_SETUP = """
+INSERT OR IGNORE INTO setups
+(id, simbolo, direcao, pool_id, evento_tipo, evento_tempo, evento_nivel,
+ leg_id, poi_fundo, poi_topo, score, ativo, criado_em)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+"""
+_SQL_SETUPS_ATIVOS = """
+SELECT id, simbolo, direcao, pool_id, evento_tipo, evento_tempo, evento_nivel,
+       leg_id, poi_fundo, poi_topo, score
+FROM setups
+WHERE simbolo = ? AND ativo = 1 AND criado_em >= ?
+ORDER BY criado_em
+"""
+_SQL_DESATIVAR_SETUP = "UPDATE setups SET ativo = 0 WHERE id = ?"
+
+_SQL_INSERIR_CONFIRMACAO = """
+INSERT OR IGNORE INTO confirmacoes
+(id, setup_id, simbolo, tipo_confirmacao, preco_confirmacao, tempo, sl, tp, rr)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
 
 class Repositorio:
     def __init__(self, caminho: str) -> None:
@@ -130,6 +184,8 @@ class Repositorio:
         self._conn.execute(_SQL_CRIAR_INDICE_VELAS)
         self._conn.execute(_SQL_CRIAR_EVENTOS)
         self._conn.execute(_SQL_CRIAR_SINAIS)
+        self._conn.execute(_SQL_CRIAR_SETUPS)
+        self._conn.execute(_SQL_CRIAR_CONFIRMACOES)
         self._conn.commit()
 
     def fechar(self) -> None:
@@ -216,5 +272,58 @@ class Repositorio:
             ob.preco_topo, ob.preco_fundo,
             fvg.preco_topo, fvg.preco_fundo,
             agora,
+        ))
+        self._conn.commit()
+
+    # --- Setups (Phase 5) ---
+
+    def setup_ja_existe(self, id_setup: str) -> bool:
+        cursor = self._conn.execute(_SQL_SETUP_EXISTE, (id_setup,))
+        return cursor.fetchone() is not None
+
+    def persistir_setup(
+        self,
+        id_setup: str,
+        simbolo: str,
+        direcao: str,
+        pool_id: str,
+        evento_tipo: str,
+        evento_tempo: datetime,
+        evento_nivel: float,
+        leg_id: str | None,
+        poi_fundo: float,
+        poi_topo: float,
+        score: int,
+    ) -> None:
+        agora = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(_SQL_INSERIR_SETUP, (
+            id_setup, simbolo, direcao, pool_id, evento_tipo,
+            evento_tempo.isoformat(), evento_nivel, leg_id,
+            poi_fundo, poi_topo, score, agora,
+        ))
+        self._conn.commit()
+
+    def carregar_setups_ativos(self, simbolo: str, cutoff: datetime) -> list[tuple]:
+        cursor = self._conn.execute(_SQL_SETUPS_ATIVOS, (simbolo, cutoff.isoformat()))
+        return cursor.fetchall()
+
+    def desativar_setup(self, id_setup: str) -> None:
+        self._conn.execute(_SQL_DESATIVAR_SETUP, (id_setup,))
+        self._conn.commit()
+
+    def persistir_confirmacao(
+        self,
+        id_conf: str,
+        setup_id: str,
+        simbolo: str,
+        tipo: str,
+        preco: float,
+        tempo: datetime,
+        sl: float,
+        tp: float,
+        rr: float,
+    ) -> None:
+        self._conn.execute(_SQL_INSERIR_CONFIRMACAO, (
+            id_conf, setup_id, simbolo, tipo, preco, tempo.isoformat(), sl, tp, rr,
         ))
         self._conn.commit()

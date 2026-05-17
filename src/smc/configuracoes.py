@@ -54,15 +54,9 @@ TELEGRAM_CHAT_ID: str = os.getenv("SMC_TELEGRAM_CHAT_ID", "")
 
 INTERVALO_VARREDURA_SEGUNDOS: int = 60
 
-MENSAGEM_ALERTA: str = (
-    "🚨 <b>SINAL SMC — {simbolo}</b>\n"
-    "📊 Timeframe: H4 (zona) + M5 (gatilho, fechamento confirmado)\n"
-    "📍 Captura de Liquidez: {direcao_captura} @ {preco_varredura:.5f}\n"
-    "🔨 BOS ({bos_qualidade}): {direcao_bos} @ {nivel_bos:.5f}\n"
-    "🟦 Order Block ({ob_qualidade}): {ob_fundo:.5f} – {ob_topo:.5f}\n"
-    "⬜ FVG ({fvg_qualidade}): {fvg_fundo:.5f} – {fvg_topo:.5f}\n"
-    "🎯 Zona de Entrada (OB∩FVG): {overlap_fundo:.5f} – {overlap_topo:.5f}\n"
-    "💰 SL: {sl:.5f} | TP: {tp:.5f} | R:R 1:{rr:.1f}\n"
-    "🔍 Sessão: {check_sessao} | Bias D1: {check_bias} | Zona: {check_zona}\n"
-    "⏰ {timestamp}"
-)
+# Phase 5 — setup pipeline
+EXIGIR_CONFIRMACAO_LTF: bool = True
+SCORE_MINIMO_SETUP: int = 40
+IDADE_MAX_SETUP_HORAS: int = 60   # 15 × 4h
+ATR_PERIODO: int = 14
+

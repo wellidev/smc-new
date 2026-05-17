@@ -112,6 +112,62 @@ CREATE TABLE IF NOT EXISTS sinais (
 );
 ```
 
+---
+
+### Métodos — Setups (Phase 5)
+
+### `setup_ja_existe(self, id_setup: str) -> bool`
+- `SELECT 1 FROM setups WHERE id = ?`
+
+### `persistir_setup(self, id_setup, simbolo, direcao, pool_id, evento_tipo, evento_tempo, evento_nivel, leg_id, poi_fundo, poi_topo, score) -> None`
+- `INSERT OR IGNORE INTO setups ...`
+
+### `carregar_setups_ativos(self, simbolo: str, cutoff: datetime) -> list[tuple]`
+- `SELECT ... FROM setups WHERE simbolo=? AND ativo=1 AND criado_em >= ?`
+- Retorna `(id, simbolo, direcao, pool_id, evento_tipo, evento_tempo, evento_nivel, leg_id, poi_fundo, poi_topo, score)` por linha
+
+### `desativar_setup(self, id_setup: str) -> None`
+- `UPDATE setups SET ativo=0 WHERE id=?`
+
+### `persistir_confirmacao(self, id_conf, setup_id, simbolo, tipo, preco, tempo, sl, tp, rr) -> None`
+- `INSERT OR IGNORE INTO confirmacoes ...`
+
+---
+
+## Schemas SQLite (adicionais)
+
+```sql
+CREATE TABLE IF NOT EXISTS setups (
+    id              TEXT PRIMARY KEY,
+    simbolo         TEXT NOT NULL,
+    direcao         TEXT NOT NULL,
+    pool_id         TEXT NOT NULL,
+    evento_tipo     TEXT NOT NULL,
+    evento_tempo    TEXT NOT NULL,
+    evento_nivel    REAL NOT NULL,
+    leg_id          TEXT,
+    poi_fundo       REAL NOT NULL,
+    poi_topo        REAL NOT NULL,
+    score           INTEGER NOT NULL,
+    ativo           INTEGER NOT NULL DEFAULT 1,
+    criado_em       TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS confirmacoes (
+    id                  TEXT PRIMARY KEY,
+    setup_id            TEXT NOT NULL,
+    simbolo             TEXT NOT NULL,
+    tipo_confirmacao    TEXT NOT NULL,
+    preco_confirmacao   REAL NOT NULL,
+    tempo               TEXT NOT NULL,
+    sl                  REAL NOT NULL,
+    tp                  REAL NOT NULL,
+    rr                  REAL NOT NULL
+);
+```
+
+---
+
 ## Cenários de Teste
 
 | # | Cenário | Resultado esperado |

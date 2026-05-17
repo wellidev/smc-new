@@ -5,9 +5,11 @@ import pytest
 
 from smc.filtros import (
     calcular_bias_d1,
+    calcular_bias_d1_v2,
     calcular_risco_rr,
     verificar_sessao,
     verificar_zona_premium_discount,
+    verificar_zona_premium_discount_v2,
 )
 from smc.analisador_smc import OrderBlock
 
@@ -238,3 +240,100 @@ class TestCalcularRiscoRr:
         assert sl == pytest.approx(1.1100)
         assert tp == pytest.approx(1.0950)
         assert rr == pytest.approx(2.0)
+
+
+# ---------------------------------------------------------------------------
+# calcular_bias_d1_v2
+# ---------------------------------------------------------------------------
+
+class TestCalcularBiasD1V2:
+    """
+    30 D1 candles (periodo_swing=2).
+
+    ALTA fixture: downtrend (H1/L1/LH/LL) → ChoCH ALTA at idx 16.
+    BAIXA fixture: uptrend (L1/H1/HL/HH) → ChoCH BAIXA at idx 16.
+    """
+
+    def _velas_bias_alta(self) -> pd.DataFrame:
+        n = 30
+        ts = _ts(n)
+        base, step = 1.1000, 0.0010
+        linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
+        linhas[4] = _vela_d1(ts[4], base, base + 0.0040, base - step, base)   # H1
+        linhas[7] = _vela_d1(ts[7], base, base + step, base - 0.0040, base)   # L1
+        linhas[10] = _vela_d1(ts[10], base, base + 0.0020, base - step, base) # H2 < H1 (LH)
+        linhas[13] = _vela_d1(ts[13], base, base + step, base - 0.0080, base) # L2 < L1 (BOS BAIXA)
+        linhas[16] = _vela_d1(ts[16], base, base + 0.0030, base - step, base) # H3 > H2 (ChoCH ALTA)
+        return _df(linhas)
+
+    def _velas_bias_baixa(self) -> pd.DataFrame:
+        n = 30
+        ts = _ts(n)
+        base, step = 1.1000, 0.0010
+        linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
+        linhas[4] = _vela_d1(ts[4], base, base + step, base - 0.0040, base)   # L1
+        linhas[7] = _vela_d1(ts[7], base, base + 0.0040, base - step, base)   # H1
+        linhas[10] = _vela_d1(ts[10], base, base + step, base - 0.0020, base) # L2 > L1 (HL)
+        linhas[13] = _vela_d1(ts[13], base, base + 0.0080, base - step, base) # H2 > H1 (BOS ALTA)
+        linhas[16] = _vela_d1(ts[16], base, base + step, base - 0.0030, base) # L3 < L2 (ChoCH BAIXA)
+        return _df(linhas)
+
+    def test_bias_alta(self):
+        # F14: last event is ChoCH ALTA
+        assert calcular_bias_d1_v2(self._velas_bias_alta(), "EURUSD", periodo_swing=2) == "ALTA"
+
+    def test_bias_baixa(self):
+        # F15: last event is ChoCH BAIXA
+        assert calcular_bias_d1_v2(self._velas_bias_baixa(), "EURUSD", periodo_swing=2) == "BAIXA"
+
+    def test_sem_eventos_retorna_none(self):
+        # F16: flat market → no swings → no events → None
+        ts = _ts(10)
+        linhas = [_vela_d1(ts[i], 1.1000, 1.1010, 1.0990, 1.1000) for i in range(10)]
+        assert calcular_bias_d1_v2(_df(linhas), "EURUSD", periodo_swing=2) is None
+
+
+# ---------------------------------------------------------------------------
+# verificar_zona_premium_discount_v2
+# ---------------------------------------------------------------------------
+
+class TestVerificarZonaPremiumDiscountV2:
+    """
+    9 D1 candles, periodo_swing=2:
+    - Swing HIGH at idx 2: maxima=1.120 (highest in window 0-4)
+    - Swing LOW at idx 5: minima=1.070 (lowest in window 3-7)
+    equilibrium = (1.120 + 1.070) / 2 = 1.095
+    """
+
+    def _velas_com_swings(self) -> pd.DataFrame:
+        ts = _ts(9)
+        data = [
+            (1.100, 1.105, 1.095, 1.100),  # 0
+            (1.103, 1.108, 1.097, 1.103),  # 1
+            (1.115, 1.120, 1.105, 1.115),  # 2 ← HIGH
+            (1.103, 1.108, 1.097, 1.103),  # 3
+            (1.100, 1.105, 1.090, 1.100),  # 4
+            (1.075, 1.085, 1.070, 1.075),  # 5 ← LOW
+            (1.080, 1.090, 1.075, 1.085),  # 6
+            (1.085, 1.095, 1.080, 1.090),  # 7
+            (1.090, 1.100, 1.085, 1.095),  # 8
+        ]
+        return _df([_vela_d1(ts[i], *d) for i, d in enumerate(data)])
+
+    def test_alta_em_desconto(self):
+        # F17: ALTA, preco=1.080 < equilibrium=1.095 → True
+        assert verificar_zona_premium_discount_v2(self._velas_com_swings(), 1.080, "ALTA", 2) is True
+
+    def test_alta_em_premium(self):
+        # F18: ALTA, preco=1.110 > equilibrium=1.095 → False
+        assert verificar_zona_premium_discount_v2(self._velas_com_swings(), 1.110, "ALTA", 2) is False
+
+    def test_baixa_em_premium(self):
+        # F19: BAIXA, preco=1.110 > equilibrium=1.095 → True
+        assert verificar_zona_premium_discount_v2(self._velas_com_swings(), 1.110, "BAIXA", 2) is True
+
+    def test_sem_swings_retorna_false(self):
+        # F20: flat 5-candle market → no confirmed swings → False
+        ts = _ts(5)
+        linhas = [_vela_d1(ts[i], 1.1000, 1.1010, 1.0990, 1.1000) for i in range(5)]
+        assert verificar_zona_premium_discount_v2(_df(linhas), 1.1000, "ALTA", 2) is False

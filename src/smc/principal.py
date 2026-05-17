@@ -3,30 +3,34 @@ import logging.handlers
 import os
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, NamedTuple
+from typing import Any
 
 import pandas as pd
 
 from smc.analisador_smc import (
-    CapturaLiquidez,
-    FairValueGap,
-    OrderBlock,
-    QuebraEstrutura,
-    _zonas_sobrepoem,
-    detectar_captura_liquidez,
-    detectar_quebra_estrutura,
-    mapear_zonas_interesse,
-    verificar_confluencia,
+    calcular_atr,
+    calcular_poi_composta,
+    calcular_score_setup,
+    detectar_eventos_estrutura,
+    detectar_mss_no_poi,
+    detectar_obs_corpo,
+    detectar_pdh_pdl,
+    detectar_eqh_eql,
+    extrair_fvgs_no_intervalo,
+    extrair_legs,
+    _marcar_obs_v2_mitigados,
+    _marcar_fvgs_mitigados,
 )
 from smc.configuracoes import (
+    ATR_PERIODO,
     ATIVOS_MONITORADOS,
     CAMINHO_BANCO,
-    IDADE_MAX_EVENTO_H4,
+    EXIGIR_CONFIRMACAO_LTF,
+    IDADE_MAX_SETUP_HORAS,
     INTERVALO_VARREDURA_SEGUNDOS,
-    LIMIAR_PAVIO,
-    MENSAGEM_ALERTA,
     PERIODO_SWING,
     PERIODO_SWING_D1,
+    SCORE_MINIMO_SETUP,
     TELEGRAM_CHAT_ID,
     TELEGRAM_TOKEN,
     TIMEFRAME_D1,
@@ -35,7 +39,12 @@ from smc.configuracoes import (
     VELAS_D1_HISTORICO,
     VELAS_HISTORICO,
 )
-from smc.filtros import calcular_bias_d1, calcular_risco_rr, verificar_sessao, verificar_zona_premium_discount
+from smc.modelos import (
+    ConfirmacaoEntrada,
+    gerar_id_confirmacao,
+    gerar_id_setup,
+)
+from smc.filtros import calcular_bias_d1_v2, verificar_sessao, verificar_zona_premium_discount_v2
 from smc.notificador import Notificador
 from smc.provedor_dados import ProvedorDados
 from smc.repositorio import Repositorio
@@ -67,71 +76,6 @@ logging.basicConfig(level=_nivel, handlers=_handlers)
 logger = logging.getLogger(__name__)
 
 
-class Confluencia(NamedTuple):
-    captura: CapturaLiquidez
-    bos: QuebraEstrutura
-    ob: OrderBlock
-    fvg: FairValueGap
-    overlap_fundo: float
-    overlap_topo: float
-
-
-def _gerar_id_sinal(simbolo: str, ob_id: str, fvg_id: str) -> str:
-    chave = f"{simbolo}{ob_id}{fvg_id}"
-    return hashlib.sha1(chave.encode()).hexdigest()[:20]
-
-
-def _gerar_id_evento(simbolo: str, tipo: str, tempo: datetime, preco: float) -> str:
-    chave = f"{simbolo}|{tipo}|{tempo.isoformat()}|{preco}"
-    return hashlib.sha1(chave.encode()).hexdigest()[:20]
-
-
-def _registrar_novos_eventos(
-    capturas: list[CapturaLiquidez],
-    quebras: list[QuebraEstrutura],
-    repo: Repositorio,
-    simbolo: str,
-) -> None:
-    for c in capturas:
-        id_ev = _gerar_id_evento(simbolo, "CAPTURA", c.tempo, c.preco_varredura)
-        if not repo.evento_ja_detectado(id_ev) and not repo.captura_ja_registrada_para_vela(simbolo, c.direcao, c.tempo):
-            repo.registrar_captura(id_ev, simbolo, c.direcao, c.tempo, c.preco_varredura, c.pavio_percentual)
-
-    for b in quebras:
-        id_ev = _gerar_id_evento(simbolo, "BOS", b.tempo, b.nivel_rompido)
-        if not repo.evento_ja_detectado(id_ev):
-            repo.registrar_bos(id_ev, simbolo, b.direcao, b.nivel_rompido, b.swing_tempo, b.tempo, b.deslocamento)
-
-
-def _carregar_eventos_ativos(
-    repo: Repositorio,
-    simbolo: str,
-    cutoff: datetime,
-) -> tuple[list[CapturaLiquidez], list[QuebraEstrutura]]:
-    capturas = [
-        CapturaLiquidez(
-            simbolo=row[0],
-            direcao=row[1],
-            preco_varredura=row[2],
-            tempo=datetime.fromisoformat(row[3]).replace(tzinfo=timezone.utc),
-            pavio_percentual=row[4] or 0.0,
-        )
-        for row in repo.carregar_capturas_ativas(simbolo, cutoff)
-    ]
-    quebras = [
-        QuebraEstrutura(
-            simbolo=row[0],
-            direcao=row[1],
-            nivel_rompido=row[2],
-            swing_tempo=datetime.fromisoformat(row[3]).replace(tzinfo=timezone.utc),
-            tempo=datetime.fromisoformat(row[4]).replace(tzinfo=timezone.utc),
-            deslocamento=bool(row[5]),
-        )
-        for row in repo.carregar_quebras_ativas(simbolo, cutoff)
-    ]
-    return capturas, quebras
-
-
 def _obter_dados_mercado(
         simbolo: str, provedor: ProvedorDados
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None] | None:
@@ -152,129 +96,6 @@ def _obter_dados_mercado(
     return velas_h4, velas_m5, velas_d1
 
 
-def _detectar_estrutura_h4(
-        velas_h4: pd.DataFrame, simbolo: str
-) -> tuple[list[CapturaLiquidez], list[QuebraEstrutura], list[OrderBlock], list[FairValueGap]]:
-    capturas = detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO, simbolo)
-    quebras = detectar_quebra_estrutura(velas_h4, simbolo, PERIODO_SWING)
-    obs, fvgs = mapear_zonas_interesse(velas_h4, simbolo)
-    return capturas, quebras, obs, fvgs
-
-
-def _encontrar_confluencias(
-        capturas: list[CapturaLiquidez],
-        quebras: list[QuebraEstrutura],
-        obs: list[OrderBlock],
-        fvgs: list[FairValueGap],
-        preco_atual: float,
-) -> list[Confluencia]:
-    resultado: list[Confluencia] = []
-    for captura in capturas:
-        for bos in quebras:
-            if not verificar_confluencia(captura, bos, obs, fvgs, preco_atual):
-                continue
-            for ob in obs:
-                if ob.mitigado:
-                    continue
-                if ob.direcao != captura.direcao:
-                    continue
-                for fvg in fvgs:
-                    if fvg.mitigado:
-                        continue
-                    if fvg.direcao != captura.direcao:
-                        continue
-                    if not _zonas_sobrepoem(ob, fvg):
-                        continue
-                    if not (ob.preco_fundo <= preco_atual <= ob.preco_topo):
-                        continue
-                    overlap_fundo = max(ob.preco_fundo, fvg.preco_fundo)
-                    overlap_topo = min(ob.preco_topo, fvg.preco_topo)
-                    resultado.append(Confluencia(captura, bos, ob, fvg, overlap_fundo, overlap_topo))
-    return resultado
-
-
-def _calcular_contexto(
-        conf: Confluencia, preco_atual: float, velas_d1: pd.DataFrame | None
-) -> dict[str, Any]:
-    em_sessao = verificar_sessao(conf.captura.tempo)
-    bias_d1 = calcular_bias_d1(velas_d1, PERIODO_SWING_D1) if velas_d1 is not None else None
-    zona_ok = (
-        verificar_zona_premium_discount(velas_d1, preco_atual, conf.captura.direcao)
-        if velas_d1 is not None else False
-    )
-    sl, tp, rr = calcular_risco_rr(preco_atual, conf.ob, conf.captura.direcao)
-
-    check_sessao = "✅ London/NY" if em_sessao else "⚠️ Fora de sessão"
-    check_bias = (
-        "✅ Alinhado" if bias_d1 == conf.captura.direcao
-        else "⚠️ Neutro" if bias_d1 is None
-        else "⚠️ Contra D1"
-    )
-    check_zona = "✅ Desconto" if (conf.captura.direcao == "ALTA" and zona_ok) else (
-        "✅ Premium" if (conf.captura.direcao == "BAIXA" and zona_ok) else "⚠️ Sem confluência"
-    )
-    bos_qualidade = "Forte 💪" if conf.bos.deslocamento else "Normal"
-
-    return {
-        "check_sessao": check_sessao,
-        "check_bias": check_bias,
-        "check_zona": check_zona,
-        "bos_qualidade": bos_qualidade,
-        "sl": sl,
-        "tp": tp,
-        "rr": rr,
-    }
-
-
-def _construir_mensagem(simbolo: str, conf: Confluencia, ctx: dict[str, Any]) -> str:
-    return MENSAGEM_ALERTA.format(
-        simbolo=simbolo,
-        direcao_captura=conf.captura.direcao,
-        preco_varredura=conf.captura.preco_varredura,
-        bos_qualidade=ctx["bos_qualidade"],
-        direcao_bos=conf.bos.direcao,
-        nivel_bos=conf.bos.nivel_rompido,
-        ob_qualidade="⚠️ Testado" if conf.ob.testado else "Virgem",
-        ob_fundo=conf.ob.preco_fundo,
-        ob_topo=conf.ob.preco_topo,
-        fvg_qualidade="⚠️ Testado" if conf.fvg.testado else "Virgem",
-        fvg_fundo=conf.fvg.preco_fundo,
-        fvg_topo=conf.fvg.preco_topo,
-        overlap_fundo=conf.overlap_fundo,
-        overlap_topo=conf.overlap_topo,
-        sl=ctx["sl"],
-        tp=ctx["tp"],
-        rr=ctx["rr"],
-        check_sessao=ctx["check_sessao"],
-        check_bias=ctx["check_bias"],
-        check_zona=ctx["check_zona"],
-        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-    )
-
-
-def _processar_confluencia(
-        simbolo: str,
-        conf: Confluencia,
-        preco_atual: float,
-        velas_d1: pd.DataFrame | None,
-        repo: Repositorio,
-        notificador: Notificador,
-) -> None:
-    id_sinal = _gerar_id_sinal(simbolo, conf.ob.id, conf.fvg.id)
-    if repo.sinal_ja_disparado(id_sinal):
-        logger.debug("Sinal %s já disparado anteriormente.", id_sinal)
-        return
-
-    ctx = _calcular_contexto(conf, preco_atual, velas_d1)
-    mensagem = _construir_mensagem(simbolo, conf, ctx)
-
-    repo.persistir_sinal(id_sinal, simbolo, conf.ob, conf.fvg, conf.captura.direcao)
-    logger.info("Novo sinal SMC para %s — %s. Enviando alerta...", simbolo, conf.captura.direcao)
-    enviado = notificador.enviar_alerta(mensagem)
-    if not enviado:
-        logger.error("Falha ao enviar alerta para %s. Sinal persistido no banco.", simbolo)
-
-
 def _processar_simbolo(
         simbolo: str,
         provedor: ProvedorDados,
@@ -286,16 +107,253 @@ def _processar_simbolo(
         return
     velas_h4, velas_m5, velas_d1 = dados
     preco_atual = float(velas_m5.iloc[-1]["fechamento"])
-    capturas_raw, quebras_raw, obs, fvgs = _detectar_estrutura_h4(velas_h4, simbolo)
-    _registrar_novos_eventos(capturas_raw, quebras_raw, repo, simbolo)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_EVENTO_H4 * 4)
-    capturas, quebras = _carregar_eventos_ativos(repo, simbolo, cutoff)
-    logger.info(
-        "%s | capturas=%d | BOS=%d | OBs=%d | FVGs=%d | preço=%.5f",
-        simbolo, len(capturas), len(quebras), len(obs), len(fvgs), preco_atual,
-    )
-    for conf in _encontrar_confluencias(capturas, quebras, obs, fvgs, preco_atual):
-        _processar_confluencia(simbolo, conf, preco_atual, velas_d1, repo, notificador)
+    _detectar_e_registrar_setups(simbolo, velas_h4, velas_m5, velas_d1, repo)
+    _verificar_confirmacoes(simbolo, velas_m5, velas_d1, preco_atual, repo, notificador)
+
+
+MENSAGEM_SETUP = (
+    "🔔 <b>SETUP SMC — {simbolo}</b> [{score}pts]\n"
+    "📊 Tipo: {evento_tipo} | Direção: {direcao}\n"
+    "🎯 POI: {poi_fundo:.5f} – {poi_topo:.5f}\n"
+    "💡 Pool: {pool_tipo} @ {pool_preco:.5f}\n"
+    "📈 Displacement: {displacement}\n"
+    "💰 SL: {sl:.5f} | TP: {tp:.5f} | R:R 1:{rr:.1f}\n"
+    "🔍 Sessão: {check_sessao} | Bias D1: {check_bias} | Zona: {check_zona}\n"
+    "⏰ {timestamp}"
+)
+
+
+def _detectar_e_registrar_setups(
+        simbolo: str,
+        velas_h4: pd.DataFrame,
+        velas_m5: pd.DataFrame,
+        velas_d1: pd.DataFrame | None,
+        repo: Repositorio,
+) -> None:
+    atr = calcular_atr(velas_h4, ATR_PERIODO)
+    if atr <= 0:
+        return
+
+    eventos = detectar_eventos_estrutura(velas_h4, simbolo, PERIODO_SWING)
+    if not eventos:
+        return
+
+    legs = extrair_legs(velas_h4, eventos, simbolo, PERIODO_SWING, atr)
+    leg_por_evento: dict[datetime, Any] = {leg.tempo_fim: leg for leg in legs}
+
+    pools = detectar_eqh_eql(velas_h4, simbolo, atr)
+    if velas_d1 is not None:
+        pools += detectar_pdh_pdl(velas_d1, simbolo, atr)
+
+    if not pools:
+        return
+
+    preco_atual = float(velas_m5.iloc[-1]["fechamento"])
+
+    for pool in pools:
+        varrido = (
+            (pool.tipo in ("EQH", "PDH") and preco_atual > pool.preco - pool.tolerancia)
+            or (pool.tipo in ("EQL", "PDL") and preco_atual < pool.preco + pool.tolerancia)
+        )
+        if not varrido:
+            continue
+
+        eventos_pos = [e for e in eventos if e.tempo > pool.tempo]
+        if not eventos_pos:
+            continue
+
+        evento = eventos_pos[0]
+        leg = leg_por_evento.get(evento.tempo)
+
+        velas_fechadas = velas_h4.iloc[:-1]
+        if leg is not None:
+            obs_leg = detectar_obs_corpo(velas_h4, leg, simbolo)
+            fvgs_leg = extrair_fvgs_no_intervalo(velas_h4, leg.indice_inicio, leg.indice_fim, simbolo)
+            _marcar_obs_v2_mitigados(obs_leg, velas_fechadas)
+            _marcar_fvgs_mitigados(fvgs_leg, velas_fechadas)
+            obs_val = [o for o in obs_leg if not o.mitigado and o.direcao == evento.direcao]
+            fvgs_val = [f for f in fvgs_leg if not f.mitigado and f.direcao == evento.direcao]
+            poi_fundo, poi_topo = calcular_poi_composta(obs_val, fvgs_val, evento.nivel_rompido)
+            tem_overlap = any(
+                max(o.preco_fundo, f.preco_fundo) <= min(o.preco_topo, f.preco_topo)
+                for o in obs_val for f in fvgs_val
+            )
+        else:
+            poi_fundo = poi_topo = evento.nivel_rompido
+            tem_overlap = False
+
+        bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
+        bias_alinhado = bias_d1 == evento.direcao
+        em_sessao = verificar_sessao(datetime.now(timezone.utc))
+        zona_ok = (
+            verificar_zona_premium_discount_v2(velas_d1, preco_atual, evento.direcao, PERIODO_SWING_D1)
+            if velas_d1 is not None else False
+        )
+
+        score = calcular_score_setup(
+            evento=evento,
+            leg=leg,
+            pool=pool,
+            velas_d1=velas_d1,
+            atr=atr,
+            tem_overlap_ob_fvg=tem_overlap,
+            em_sessao=em_sessao,
+            zona_ok=zona_ok,
+            bias_alinhado=bias_alinhado,
+        )
+
+        if score < SCORE_MINIMO_SETUP:
+            logger.debug("Setup %s ignorado: score=%d < %d", simbolo, score, SCORE_MINIMO_SETUP)
+            continue
+
+        setup_id = gerar_id_setup(simbolo, pool.id, evento.tempo)
+        if repo.setup_ja_existe(setup_id):
+            continue
+
+        repo.persistir_setup(
+            id_setup=setup_id,
+            simbolo=simbolo,
+            direcao=evento.direcao,
+            pool_id=pool.id,
+            evento_tipo=evento.tipo,
+            evento_tempo=evento.tempo,
+            evento_nivel=evento.nivel_rompido,
+            leg_id=leg.id if leg else None,
+            poi_fundo=poi_fundo,
+            poi_topo=poi_topo,
+            score=score,
+        )
+        logger.info("Setup SMC registrado: %s %s score=%d POI=[%.5f-%.5f]",
+                    simbolo, evento.direcao, score, poi_fundo, poi_topo)
+
+
+def _verificar_confirmacoes(
+        simbolo: str,
+        velas_m5: pd.DataFrame,
+        velas_d1: pd.DataFrame | None,
+        preco_atual: float,
+        repo: Repositorio,
+        notificador: Notificador,
+) -> None:
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_SETUP_HORAS)
+    setups = repo.carregar_setups_ativos(simbolo, cutoff)
+
+    for row in setups:
+        (setup_id, _, direcao, pool_id, evento_tipo, evento_tempo_str,
+         evento_nivel, leg_id, poi_fundo, poi_topo, score) = row
+
+        if EXIGIR_CONFIRMACAO_LTF:
+            confirmacao = detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo)
+            if confirmacao is None:
+                continue
+        else:
+            if not (poi_fundo <= preco_atual <= poi_topo):
+                continue
+            from smc.modelos import gerar_id_confirmacao as _gid
+            sl, tp, rr = _calcular_risco_rr_direto(preco_atual, poi_fundo, poi_topo, direcao)
+            confirmacao = ConfirmacaoEntrada(
+                id=_gid(simbolo, setup_id, datetime.now(timezone.utc)),
+                setup_id=setup_id,
+                simbolo=simbolo,
+                tipo_confirmacao="DIRETO",
+                preco_confirmacao=preco_atual,
+                tempo=datetime.now(timezone.utc),
+                sl=sl,
+                tp=tp,
+                rr=rr,
+            )
+
+        id_sinal = hashlib.sha1(
+            f"{setup_id}|{confirmacao.tempo.isoformat()}".encode()
+        ).hexdigest()[:20]
+
+        if repo.sinal_ja_disparado(id_sinal):
+            continue
+
+        bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
+        em_sessao = verificar_sessao(datetime.now(timezone.utc))
+        zona_ok = (
+            verificar_zona_premium_discount_v2(velas_d1, preco_atual, direcao, PERIODO_SWING_D1)
+            if velas_d1 is not None else False
+        )
+
+        check_sessao = "✅ London/NY" if em_sessao else "⚠️ Fora de sessão"
+        check_bias = (
+            "✅ Alinhado" if bias_d1 == direcao
+            else "⚠️ Neutro" if bias_d1 is None
+            else "⚠️ Contra D1"
+        )
+        check_zona = (
+            ("✅ Desconto" if direcao == "ALTA" else "✅ Premium") if zona_ok
+            else "⚠️ Sem confluência"
+        )
+        displacement = "✅ Sim" if leg_id else "—"
+
+        mensagem = MENSAGEM_SETUP.format(
+            simbolo=simbolo,
+            score=score,
+            evento_tipo=evento_tipo,
+            direcao=direcao,
+            poi_fundo=poi_fundo,
+            poi_topo=poi_topo,
+            pool_tipo=pool_id[:3],
+            pool_preco=poi_fundo,
+            displacement=displacement,
+            sl=confirmacao.sl,
+            tp=confirmacao.tp,
+            rr=confirmacao.rr,
+            check_sessao=check_sessao,
+            check_bias=check_bias,
+            check_zona=check_zona,
+            timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        )
+
+        repo.persistir_confirmacao(
+            id_conf=confirmacao.id,
+            setup_id=setup_id,
+            simbolo=simbolo,
+            tipo=confirmacao.tipo_confirmacao,
+            preco=confirmacao.preco_confirmacao,
+            tempo=confirmacao.tempo,
+            sl=confirmacao.sl,
+            tp=confirmacao.tp,
+            rr=confirmacao.rr,
+        )
+
+        class _FakeZona:
+            def __init__(self, id_: str, t: float, f: float):
+                self.id = id_
+                self.preco_topo = t
+                self.preco_fundo = f
+
+        repo.persistir_sinal(
+            id_sinal,
+            simbolo,
+            _FakeZona(setup_id, poi_topo, poi_fundo),
+            _FakeZona(setup_id + "_fvg", poi_topo, poi_fundo),
+            direcao,
+        )
+
+        repo.desativar_setup(setup_id)
+        logger.info("Sinal v2 disparado: %s %s score=%d", simbolo, direcao, score)
+
+        enviado = notificador.enviar_alerta(mensagem)
+        if not enviado:
+            logger.error("Falha ao enviar alerta v2 para %s.", simbolo)
+
+
+def _calcular_risco_rr_direto(
+        preco: float, poi_fundo: float, poi_topo: float, direcao: str
+) -> tuple[float, float, float]:
+    if direcao == "ALTA":
+        sl = poi_fundo
+        risco = preco - sl
+        tp = preco + 2.0 * risco if risco > 0 else preco
+    else:
+        sl = poi_topo
+        risco = sl - preco
+        tp = preco - 2.0 * risco if risco > 0 else preco
+    return sl, tp, 2.0
 
 
 def _conectar_mt5_com_retry(provedor: ProvedorDados, tentativas: int = 3) -> bool:

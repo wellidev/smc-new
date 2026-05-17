@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pandas as pd
 
-from smc.analisador_smc import calcular_swings
+from smc.analisador_smc import calcular_swings, calcular_swings_confirmados, detectar_eventos_estrutura
 from smc.configuracoes import (
     SESSAO_LONDON_FIM,
     SESSAO_LONDON_INICIO,
@@ -65,3 +65,29 @@ def calcular_risco_rr(
         risco = sl - preco_entrada
         tp = preco_entrada - 2.0 * risco
     return sl, tp, 2.0
+
+
+def calcular_bias_d1_v2(velas_d1: pd.DataFrame, simbolo: str, periodo_swing: int) -> str | None:
+    eventos = detectar_eventos_estrutura(velas_d1, simbolo, periodo_swing)
+    if not eventos:
+        return None
+    return eventos[-1].direcao
+
+
+def verificar_zona_premium_discount_v2(
+    velas_d1: pd.DataFrame,
+    preco_atual: float,
+    direcao: str,
+    periodo_swing: int,
+) -> bool:
+    swings = calcular_swings_confirmados(velas_d1, periodo_swing)
+    highs = [s for s in swings if s.tipo == "HIGH"]
+    lows = [s for s in swings if s.tipo == "LOW"]
+    if not highs or not lows:
+        return False
+    last_high = max(highs, key=lambda s: s.indice).preco
+    last_low = max(lows, key=lambda s: s.indice).preco
+    equilibrium = (last_high + last_low) / 2.0
+    if direcao == "ALTA":
+        return preco_atual < equilibrium
+    return preco_atual > equilibrium

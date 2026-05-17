@@ -4,10 +4,37 @@
       "Bash(rtk *)",
       "mcp__code-review-graph__get_architecture_overview_tool",
       "mcp__code-review-graph__semantic_search_nodes_tool",
-      "mcp__code-review-graph__query_graph_tool"
+      "mcp__code-review-graph__query_graph_tool",
+      "mcp__code-review-graph__list_graph_stats_tool"
     ]
   },
   "enabledMcpjsonServers": [
     "code-review-graph"
-  ]
+  ],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git rev-parse --git-dir >/dev/null 2>&1 && code-review-graph update --skip-flows --repo \"C:/Users/welli/IdeaProjects/personal/smc-new\" || true",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git rev-parse --git-dir >/dev/null 2>&1 && code-review-graph status --repo \"C:/Users/welli/IdeaProjects/personal/smc-new\" || echo 'Not a git repo, skipping'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
 }

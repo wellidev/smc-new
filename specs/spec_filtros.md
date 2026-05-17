@@ -17,7 +17,7 @@ hora = tempo.hour + tempo.minute / 60.0
 return (SESSAO_LONDON_INICIO <= hora < SESSAO_LONDON_FIM) or (SESSAO_NY_INICIO <= hora < SESSAO_NY_FIM)
 ```
 
-O `tempo` é o momento da captura de liquidez (sweep). Capturas durante London/NY têm maior probabilidade de ser manipulação institucional real.
+O `tempo` deve ser `datetime.now(timezone.utc)` no momento do despacho do alerta — não o tempo do evento histórico. Usar o tempo da captura (evento passado) produziria verificação de sessão incorreta. Corrigido em `principal.py::_calcular_contexto`.
 
 ---
 
@@ -88,3 +88,42 @@ O `ob` é qualquer objeto com atributos `preco_fundo` e `preco_topo` (duck typin
 | F11 | `verificar_zona_premium_discount` | BAIXA, preço acima do midpoint | `True` |
 | F12 | `calcular_risco_rr` | ALTA, entrada=1.1050, ob.fundo=1.1000 | `sl=1.1000, tp=1.1150, rr=2.0` |
 | F13 | `calcular_risco_rr` | BAIXA, entrada=1.1050, ob.topo=1.1100 | `sl=1.1100, tp=1.0950, rr=2.0` |
+
+---
+
+### `calcular_bias_d1_v2(velas_d1: pd.DataFrame, simbolo: str, periodo_swing: int) -> str | None`
+Retorna a direção do bias D1 baseado no evento estrutural mais recente.
+
+**Algoritmo:**
+1. Chama `detectar_eventos_estrutura(velas_d1, simbolo, periodo_swing)` — state machine ChoCH/BOS
+2. Se não há eventos → retorna `None`
+3. Retorna `eventos[-1].direcao` (direção do evento mais recente)
+
+Mais robusto que `calcular_bias_d1` pois usa a state machine completa (HH/HL/LH/LL) em vez de apenas 2 swings consecutivos.
+
+---
+
+### `verificar_zona_premium_discount_v2(velas_d1: pd.DataFrame, preco_atual: float, direcao: str, periodo_swing: int) -> bool`
+Retorna `True` se o preço está na zona estruturalmente correta usando range baseado em swings confirmados.
+
+**Algoritmo:**
+1. Chama `calcular_swings_confirmados(velas_d1, periodo_swing)` — janela simétrica
+2. Extrai o swing high mais recente e swing low mais recente (por índice)
+3. `equilibrium = (last_high.preco + last_low.preco) / 2.0`
+4. `ALTA válido → preco_atual < equilibrium` (desconto)
+5. `BAIXA válido → preco_atual > equilibrium` (premium)
+6. Se não há swings confirmados suficientes → retorna `False`
+
+Mais preciso que `verificar_zona_premium_discount` pois usa o range estrutural real (swings confirmados) em vez dos últimos 20 candles.
+
+## Cenários de Teste v2
+
+| # | Função | Cenário | Esperado |
+|---|--------|---------|----------|
+| F14 | `calcular_bias_d1_v2` | Último evento é BOS/ChoCH ALTA | `"ALTA"` |
+| F15 | `calcular_bias_d1_v2` | Último evento é BOS/ChoCH BAIXA | `"BAIXA"` |
+| F16 | `calcular_bias_d1_v2` | Sem eventos estruturais detectados | `None` |
+| F17 | `verificar_zona_premium_discount_v2` | ALTA, preço abaixo do equilíbrio | `True` |
+| F18 | `verificar_zona_premium_discount_v2` | ALTA, preço acima do equilíbrio | `False` |
+| F19 | `verificar_zona_premium_discount_v2` | BAIXA, preço acima do equilíbrio | `True` |
+| F20 | `verificar_zona_premium_discount_v2` | Sem swings confirmados | `False` |
