@@ -127,9 +127,11 @@ Requer `i + 1 < len(velas)` — se não existir candle à direita, `deslocamento
   - "Última vela bullish": a vela candidata deve ser imediatamente seguida por uma vela não-bullish (`close <= open`)
   - Impulso: fechamentos **estritamente** decrescentes OU engolfo bearish
 - Zona: `preco_topo = high`, `preco_fundo = low`
-- **Mitigação direction-aware:**
-  - OB Bullish: `fundo < close < topo` OU wick retorna à zona vindo de cima (`high >= topo AND low <= topo AND close <= topo`)
-  - OB Bearish: `fundo < close < topo` OU wick retorna à zona vindo de baixo (`low <= fundo AND high >= fundo AND close >= fundo`)
+- **Mitigação direction-aware (somente velas fechadas):**
+  - OB Bullish mitigado quando `close < preco_fundo` — fechamento abaixo da zona indica rompimento para baixo
+  - OB Bearish mitigado quando `close > preco_topo` — fechamento acima da zona indica rompimento para cima
+  - Um toque ou teste com fechamento **dentro** da zona **não mitiga** — é sinal de entrada válido
+  - A marcação usa apenas velas **fechadas** (`velas_h4[:-1]`); a última vela (ainda aberta no MT5) é excluída — seu `fechamento` é o tick atual, que coincidiria com `preco_atual_m5` e causaria mitigação prematura ao entrar na zona
 - **Qualidade: Virgem vs. Testado (`_marcar_obs_testados`, chamada após mitigação):**
   - OB Bullish testado: candle posterior com `abertura >= topo AND minima <= topo` (abriu acima da zona e wick entrou nela — retrace de cima)
   - OB Bearish testado: candle posterior com `abertura <= fundo AND maxima >= fundo` (abriu abaixo da zona e wick entrou nela — retrace de baixo)
@@ -164,9 +166,11 @@ Requer `i + 1 < len(velas)` — se não existir candle à direita, `deslocamento
 
 **Critério de sobreposição e zona de entrada:**
 ```
-sobreposição = max(ob.preco_fundo, fvg.preco_fundo) < min(ob.preco_topo, fvg.preco_topo)
+sobreposição = max(ob.preco_fundo, fvg.preco_fundo) <= min(ob.preco_topo, fvg.preco_topo)
 entrada válida = ob.preco_fundo <= preco_atual_m5 <= ob.preco_topo
 ```
+
+O operador `<=` (não `<` estrito) permite sobreposição de fronteira: um OB cujo `preco_topo` coincide com o `preco_fundo` de um FVG adjacente (padrão mais comum — OB base do impulso que gerou o FVG) é considerado confluência válida.
 
 A sobreposição OB∩FVG é calculada e reportada na mensagem Telegram como informação de contexto, mas não é exigida como condição de entrada. Basta o preço estar dentro do OB que contém pelo menos um FVG sobreposto.
 
@@ -190,7 +194,7 @@ Sinal BAIXA: captura="BAIXA" + bos="BAIXA" + ob="BAIXA" + preço dentro do OB be
 | 1 | Sweep bearish válido | pavio_sup = 40% do range, high > swing high, close < swing high | `CapturaLiquidez(direcao="BAIXA")` |
 | 2 | Sweep rejeitado | pavio_sup = 20% do range | `[]` |
 | 3 | OB Bullish simples | Vela bearish + 3 velas bullish subsequentes | `OrderBlock(direcao="ALTA")` |
-| 4 | OB mitigado | OB + vela posterior fecha dentro da zona | `ob.mitigado = True` |
+| 4 | OB mitigado | OB + vela posterior fecha **abaixo do fundo** (OB ALTA) ou **acima do topo** (OB BAIXA) | `ob.mitigado = True` |
 | 5 | FVG Bearish | Trio: `low[i] > high[i+2]` | `FairValueGap(direcao="BAIXA")` |
 | 6 | BOS de Alta | `close > swing_high` | `QuebraEstrutura(direcao="ALTA")` |
 | 7 | BOS de Baixa | `close < swing_low` | `QuebraEstrutura(direcao="BAIXA")` |

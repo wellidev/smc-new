@@ -110,27 +110,28 @@ class TestCapturaLiquidez:
 class TestOrderBlocks:
     """
     OB bullish: última vela bearish antes de impulso bullish de 3 velas.
-    Para evitar mitigação involuntária, as velas padrão têm fechamento bem
-    abaixo do fundo da zona do OB.
-    Fixture: len=8, OB em índice 3, impulso em 4-6, vela[7] abaixo da zona.
+    Fixture: len=9, OB em índice 3, impulso em 4-6, vela[7] de teste/mitigação,
+    vela[8] é a "vela aberta" excluída automaticamente pelo Fix 1.
+    Velas padrão ficam ACIMA da zona do OB para não disparar mitigação acidental.
     """
 
     def _velas_ob_bullish(self, com_mitigacao: bool = False) -> pd.DataFrame:
-        ts = _ts(8)
-        # Padrão: preços bem abaixo da zona do OB para não mitigar
-        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(8)]
+        ts = _ts(9)
+        # Padrão: preços acima da zona do OB (close=1.1250) para não acionar mitigação
+        velas = [_montar_vela(ts[i], 1.1200, 1.1300, 1.1150, 1.1250) for i in range(9)]
 
         # OB bullish: vela bearish, zona [1.0980, 1.1060]
         velas[3] = _montar_vela(ts[3], 1.1020, 1.1060, 1.0980, 1.0990)
 
-        # Impulso bullish com closes acima do topo do OB (1.1060) → não mitiga
+        # Impulso bullish com closes acima do topo do OB (1.1060)
         velas[4] = _montar_vela(ts[4], 1.0990, 1.1120, 1.0985, 1.1100)
         velas[5] = _montar_vela(ts[5], 1.1100, 1.1180, 1.1090, 1.1170)
         velas[6] = _montar_vela(ts[6], 1.1170, 1.1230, 1.1160, 1.1220)
 
         if com_mitigacao:
-            # Fecha dentro da zona [1.0980, 1.1060] → mitiga o OB
-            velas[7] = _montar_vela(ts[7], 1.1020, 1.1055, 1.0975, 1.1020)
+            # Close ABAIXO do preco_fundo (1.0980) → zona perfurada completamente
+            velas[7] = _montar_vela(ts[7], 1.1020, 1.1055, 1.0960, 1.0960)
+        # velas[8] é a "vela aberta" excluída da marcação pelo mapear_zonas_interesse
 
         return _df(velas)
 
@@ -143,7 +144,7 @@ class TestOrderBlocks:
     def test_ob_mitigado_excluido(self):
         df = self._velas_ob_bullish(com_mitigacao=True)
         obs, _ = mapear_zonas_interesse(df, "EURUSD")
-        # OB bullish em [1.0980, 1.1060] deve estar mitigado e ausente dos resultados
+        # OB bullish em [1.0980, 1.1060]: close abaixo do fundo (1.0960 < 1.0980) perfura a zona → mitigado
         bullish_na_zona = [
             ob for ob in obs
             if ob.direcao == "ALTA" and abs(ob.preco_fundo - 1.0980) < 0.0001

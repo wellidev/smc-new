@@ -7,15 +7,17 @@ Orquestrar o loop de varredura contínua. Coordena todos os módulos, gerencia o
 
 ```
 para cada símbolo em ATIVOS_MONITORADOS:
-    1. obter velas H4 via ProvedorDados (estrutura SMC)
-    2. obter velas M15 via ProvedorDados (preço atual do gatilho)
+    1. obter velas H4 via ProvedorDados (estrutura SMC — TIMEFRAME_ESTRUTURAL)
+    2. obter velas M5 via ProvedorDados (preço atual do gatilho — TIMEFRAME_GATILHO)
     3. obter velas D1 via ProvedorDados (bias macro + premium/discount) — não aborta se None
     4. detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO)
     5. detectar_quebra_estrutura(velas_h4, símbolo, PERIODO_SWING)
     6. mapear_zonas_interesse(velas_h4, símbolo)  → (obs, fvgs)
+       ↳ internamente usa velas_h4[:-1] para marcação — a vela aberta é excluída
+         (ver spec_analisador_smc.md — "Mitigação direction-aware")
     6a. registrar no SQLite capturas e BOS novos (via _registrar_novos_eventos)
     6b. carregar todos os eventos ativos do SQLite dentro de IDADE_MAX_EVENTO_H4 × 4h
-    7. preco_atual = velas_m15.iloc[-1].fechamento
+    7. preco_atual = velas_m5.iloc[-1].fechamento
     8. para cada captura × bos × ob × fvg:
        verificar_confluencia(captura, bos, obs, fvgs, preco_atual)
     9. se confluência detectada:
@@ -98,8 +100,8 @@ class Confluencia(NamedTuple):
 ```
 
 ### `_obter_dados_mercado(simbolo, provedor) -> tuple[DataFrame, DataFrame, DataFrame | None] | None`
-- Busca H4 (≥ 20 velas), M15 (≥ 1 vela), D1 (opcional)
-- Retorna `None` com `logger.warning` se H4 ou M15 insuficientes
+- Busca H4 (≥ 20 velas), M5 (≥ 1 vela), D1 (opcional)
+- Retorna `None` com `logger.warning` se H4 ou M5 insuficientes
 - `velas_d1=None` não bloqueia — retorna a tripla mesmo assim
 
 ### `_detectar_estrutura_h4(velas_h4, simbolo) -> tuple[list, list, list[OrderBlock], list[FairValueGap]]`

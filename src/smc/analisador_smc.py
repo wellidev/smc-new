@@ -170,10 +170,13 @@ def mapear_zonas_interesse(
     order_blocks = _detectar_order_blocks(velas_h4, simbolo)
     fvgs = _detectar_fvgs(velas_h4, simbolo)
 
-    _marcar_obs_mitigados(order_blocks, velas_h4)
-    _marcar_fvgs_mitigados(fvgs, velas_h4)
-    _marcar_obs_testados(order_blocks, velas_h4)
-    _marcar_fvgs_testados(fvgs, velas_h4)
+    # Exclui a última vela (ainda aberta) da marcação — MT5 retorna o tick atual
+    # como "fechamento" da vela em andamento, o que causaria mitigação prematura.
+    velas_fechadas = velas_h4.iloc[:-1]
+    _marcar_obs_mitigados(order_blocks, velas_fechadas)
+    _marcar_fvgs_mitigados(fvgs, velas_fechadas)
+    _marcar_obs_testados(order_blocks, velas_fechadas)
+    _marcar_fvgs_testados(fvgs, velas_fechadas)
 
     obs_ativos = [ob for ob in order_blocks if not ob.mitigado]
     fvgs_ativos = [fvg for fvg in fvgs if not fvg.mitigado]
@@ -358,22 +361,17 @@ def _marcar_obs_mitigados(obs: list[OrderBlock], velas: pd.DataFrame) -> None:
     for ob in obs:
         velas_pos = velas[velas["tempo"] > ob.tempo]
         for _, v in velas_pos.iterrows():
-            low = float(v["minima"])
-            high = float(v["maxima"])
             close = float(v["fechamento"])
-            if ob.direcao == "ALTA":
-                # Close dentro da zona OU wick retorna à zona vindo de cima
-                inside = ob.preco_fundo < close < ob.preco_topo
-                wick_retorno = high >= ob.preco_topo and low <= ob.preco_topo and close <= ob.preco_topo
-                if inside or wick_retorno:
-                    ob.mitigado = True
-                    break
-            else:
-                inside = ob.preco_fundo < close < ob.preco_topo
-                wick_retorno = low <= ob.preco_fundo and high >= ob.preco_fundo and close >= ob.preco_fundo
-                if inside or wick_retorno:
-                    ob.mitigado = True
-                    break
+            # Mitigado apenas quando o fechamento perfura além da zona:
+            # OB ALTA (demanda): close abaixo do fundo indica que a zona foi rompida para baixo.
+            # OB BAIXA (oferta): close acima do topo indica que a zona foi rompida para cima.
+            # Um simples toque ou teste (close dentro da zona) NÃO mitiga — é sinal de entrada válido.
+            if ob.direcao == "ALTA" and close < ob.preco_fundo:
+                ob.mitigado = True
+                break
+            elif ob.direcao == "BAIXA" and close > ob.preco_topo:
+                ob.mitigado = True
+                break
 
 
 def _marcar_obs_testados(obs: list[OrderBlock], velas: pd.DataFrame) -> None:
@@ -424,7 +422,8 @@ def _marcar_fvgs_mitigados(fvgs: list[FairValueGap], velas: pd.DataFrame) -> Non
 
 
 def _zonas_sobrepoem(ob: OrderBlock, fvg: FairValueGap) -> bool:
-    return max(ob.preco_fundo, fvg.preco_fundo) < min(ob.preco_topo, fvg.preco_topo)
+    # `<=` aceita toque de borda: OB adjacente ao FVG (topo_ob == fundo_fvg) também é confluência válida.
+    return max(ob.preco_fundo, fvg.preco_fundo) <= min(ob.preco_topo, fvg.preco_topo)
 
 
 def _gerar_id(simbolo: str, vela: pd.Series) -> str:
