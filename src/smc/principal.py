@@ -206,6 +206,15 @@ def _detectar_e_registrar_setups(
             logger.debug("Setup %s ignorado: score=%d < %d", simbolo, score, SCORE_MINIMO_SETUP)
             continue
 
+        if poi_fundo >= poi_topo:
+            logger.debug("Setup %s ignorado: POI sem range (%.5f–%.5f)", simbolo, poi_fundo, poi_topo)
+            continue
+
+        cutoff_zona = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_SETUP_HORAS)
+        if repo.setup_ativo_na_zona(simbolo, evento.direcao, poi_fundo, poi_topo, cutoff_zona):
+            logger.debug("Setup %s ignorado: zona POI já coberta por setup ativo", simbolo)
+            continue
+
         setup_id = gerar_id_setup(simbolo, pool.id, evento.tempo)
         if repo.setup_ja_existe(setup_id):
             continue

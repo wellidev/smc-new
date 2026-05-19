@@ -112,7 +112,9 @@ def gerar_id_leg(simbolo: str, tempo_inicio: datetime, tempo_fim: datetime) -> s
 
 
 def gerar_id_pool(simbolo: str, tipo: str, preco: float, tempo: datetime) -> str:
-    chave = f"{simbolo}|{tipo}|{round(preco, 5)}|{tempo.isoformat()}"
+    # tempo excluído: o mesmo nível de preço deve gerar o mesmo pool_id
+    # independente do swing que o identificou (evita setup_ids instáveis entre ciclos)
+    chave = f"{simbolo}|{tipo}|{round(preco, 5)}"
     return hashlib.sha1(chave.encode()).hexdigest()[:16]
 
 

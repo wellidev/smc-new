@@ -153,6 +153,12 @@ CREATE TABLE IF NOT EXISTS confirmacoes (
 """
 
 _SQL_SETUP_EXISTE = "SELECT 1 FROM setups WHERE id = ?"
+_SQL_SETUP_ATIVO_NA_ZONA = """
+SELECT 1 FROM setups
+WHERE simbolo = ? AND direcao = ? AND ativo = 1 AND criado_em >= ?
+  AND poi_fundo < ? AND poi_topo > ?
+LIMIT 1
+"""
 _SQL_INSERIR_SETUP = """
 INSERT OR IGNORE INTO setups
 (id, simbolo, direcao, pool_id, evento_tipo, evento_tempo, evento_nivel,
@@ -279,6 +285,20 @@ class Repositorio:
 
     def setup_ja_existe(self, id_setup: str) -> bool:
         cursor = self._conn.execute(_SQL_SETUP_EXISTE, (id_setup,))
+        return cursor.fetchone() is not None
+
+    def setup_ativo_na_zona(
+        self,
+        simbolo: str,
+        direcao: str,
+        poi_fundo: float,
+        poi_topo: float,
+        cutoff: datetime,
+    ) -> bool:
+        cursor = self._conn.execute(
+            _SQL_SETUP_ATIVO_NA_ZONA,
+            (simbolo, direcao, cutoff.isoformat(), poi_topo, poi_fundo),
+        )
         return cursor.fetchone() is not None
 
     def persistir_setup(
