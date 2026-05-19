@@ -215,7 +215,8 @@ def _detectar_e_registrar_setups(
             logger.debug("Setup %s ignorado: zona POI já coberta por setup ativo", simbolo)
             continue
 
-        setup_id = gerar_id_setup(simbolo, pool.id, evento.tempo)
+        ancora = leg.id if leg is not None else evento.tipo
+        setup_id = gerar_id_setup(simbolo, ancora, evento.tempo)
         if repo.setup_ja_existe(setup_id):
             continue
 

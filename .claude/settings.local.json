@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(rtk *)",
-      "mcp__code-review-graph__*"
+      "mcp__code-review-graph__*",
+      "Bash(python -c ' *)",
+      "Bash(python *)"
     ]
   },
   "enabledMcpjsonServers": [

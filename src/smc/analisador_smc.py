@@ -705,8 +705,12 @@ def detectar_eqh_eql(
             if chave in vistos:
                 continue
             vistos.add(chave)
+            # Quantiza o preço ao bucket da tolerância para estabilizar o pool_id
+            # entre ciclos: variações sub-tolerância no centro (por mudança de membros
+            # do cluster) não devem gerar um hash diferente.
+            preco_bucket = round(centro / tolerancia) * tolerancia
             resultado.append(PoolLiquidez(
-                id=gerar_id_pool(simbolo, tipo, centro, tempo_i),
+                id=gerar_id_pool(simbolo, tipo, preco_bucket, tempo_i),
                 simbolo=simbolo,
                 tipo=tipo,
                 preco=centro,

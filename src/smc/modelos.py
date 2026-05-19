@@ -118,8 +118,9 @@ def gerar_id_pool(simbolo: str, tipo: str, preco: float, tempo: datetime) -> str
     return hashlib.sha1(chave.encode()).hexdigest()[:16]
 
 
-def gerar_id_setup(simbolo: str, pool_id: str, evento_tempo: datetime) -> str:
-    chave = f"{simbolo}|{pool_id}|{evento_tempo.isoformat()}"
+def gerar_id_setup(simbolo: str, ancora_id: str, evento_tempo: datetime) -> str:
+    # ancora_id deve ser leg.id (estável) — não pool.id (instável por ATR variável)
+    chave = f"{simbolo}|{ancora_id}|{evento_tempo.isoformat()}"
     return hashlib.sha1(chave.encode()).hexdigest()[:20]
 
 
