@@ -24,59 +24,6 @@ _SQL_CRIAR_INDICE_VELAS = """
                           CREATE INDEX IF NOT EXISTS idx_velas_lookup ON velas (simbolo, timeframe, tempo DESC); \
                           """
 
-_SQL_CRIAR_EVENTOS = """
-                     CREATE TABLE IF NOT EXISTS eventos_detectados
-                     (
-                         id_evento        TEXT PRIMARY KEY,
-                         simbolo          TEXT NOT NULL,
-                         tipo             TEXT NOT NULL,
-                         direcao          TEXT NOT NULL DEFAULT '',
-                         tempo_vela       TEXT NOT NULL,
-                         preco            REAL NOT NULL,
-                         pavio_percentual REAL,
-                         swing_tempo      TEXT,
-                         deslocamento     INTEGER,
-                         detectado_em     TEXT NOT NULL
-                     ); \
-                     """
-
-_SQL_EVENTO_EXISTE = "SELECT 1 FROM eventos_detectados WHERE id_evento = ?"
-
-_SQL_CAPTURA_VELA_EXISTE = """
-    SELECT 1 FROM eventos_detectados
-    WHERE simbolo = ? AND tipo = 'CAPTURA' AND direcao = ? AND tempo_vela = ?
-"""
-
-_SQL_REGISTRAR_CAPTURA = """
-                         INSERT OR IGNORE INTO eventos_detectados
-                         (id_evento, simbolo, tipo, direcao, tempo_vela, preco, pavio_percentual, detectado_em)
-                         VALUES (?, ?, 'CAPTURA', ?, ?, ?, ?, ?) \
-                         """
-
-_SQL_REGISTRAR_BOS = """
-                     INSERT OR IGNORE INTO eventos_detectados
-                     (id_evento, simbolo, tipo, direcao, tempo_vela, preco, swing_tempo, deslocamento, detectado_em)
-                     VALUES (?, ?, 'BOS', ?, ?, ?, ?, ?, ?) \
-                     """
-
-_SQL_CAPTURAS_ATIVAS = """
-                       SELECT simbolo, direcao, preco, tempo_vela, pavio_percentual
-                       FROM eventos_detectados
-                       WHERE simbolo = ?
-                         AND tipo = 'CAPTURA'
-                         AND tempo_vela >= ?
-                       ORDER BY tempo_vela \
-                       """
-
-_SQL_QUEBRAS_ATIVAS = """
-                      SELECT simbolo, direcao, preco, swing_tempo, tempo_vela, deslocamento
-                      FROM eventos_detectados
-                      WHERE simbolo = ?
-                        AND tipo = 'BOS'
-                        AND tempo_vela >= ?
-                      ORDER BY tempo_vela \
-                      """
-
 _SQL_CRIAR_SINAIS = """
                     CREATE TABLE IF NOT EXISTS sinais
                     (
@@ -114,7 +61,7 @@ _SQL_BUSCAR_VELAS = """
 _SQL_SINAL_EXISTE = "SELECT 1 FROM sinais WHERE id_sinal = ?"
 
 _SQL_INSERIR_SINAL = """
-                     INSERT INTO sinais
+                     INSERT OR IGNORE INTO sinais
                      (id_sinal, simbolo, ob_id, fvg_id, direcao, preco_ob_topo, preco_ob_fundo,
                       preco_fvg_topo, preco_fvg_fundo, timestamp)
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
@@ -155,7 +102,7 @@ CREATE TABLE IF NOT EXISTS confirmacoes (
 _SQL_SETUP_EXISTE = "SELECT 1 FROM setups WHERE id = ?"
 _SQL_SETUP_ATIVO_NA_ZONA = """
 SELECT 1 FROM setups
-WHERE simbolo = ? AND direcao = ? AND ativo = 1 AND criado_em >= ?
+WHERE simbolo = ? AND direcao = ? AND criado_em >= ?
   AND poi_fundo < ? AND poi_topo > ?
 LIMIT 1
 """
@@ -180,6 +127,8 @@ INSERT OR IGNORE INTO confirmacoes
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
+_SQL_LIMPAR_SETUPS_ANTIGOS = "DELETE FROM setups WHERE ativo = 0 AND criado_em < ?"
+
 
 class Repositorio:
     def __init__(self, caminho: str) -> None:
@@ -188,7 +137,6 @@ class Repositorio:
         self._conn = sqlite3.connect(caminho)
         self._conn.execute(_SQL_CRIAR_VELAS)
         self._conn.execute(_SQL_CRIAR_INDICE_VELAS)
-        self._conn.execute(_SQL_CRIAR_EVENTOS)
         self._conn.execute(_SQL_CRIAR_SINAIS)
         self._conn.execute(_SQL_CRIAR_SETUPS)
         self._conn.execute(_SQL_CRIAR_CONFIRMACOES)
@@ -215,56 +163,6 @@ class Repositorio:
         cursor = self._conn.execute(_SQL_BUSCAR_VELAS, (simbolo, timeframe, quantidade))
         return cursor.fetchall()
 
-    # --- Eventos Detectados ---
-
-    def evento_ja_detectado(self, id_evento: str) -> bool:
-        cursor = self._conn.execute(_SQL_EVENTO_EXISTE, (id_evento,))
-        return cursor.fetchone() is not None
-
-    def captura_ja_registrada_para_vela(self, simbolo: str, direcao: str, tempo: datetime) -> bool:
-        cursor = self._conn.execute(_SQL_CAPTURA_VELA_EXISTE, (simbolo, direcao, tempo.isoformat()))
-        return cursor.fetchone() is not None
-
-    def registrar_captura(
-            self,
-            id_evento: str,
-            simbolo: str,
-            direcao: str,
-            tempo: datetime,
-            preco_varredura: float,
-            pavio_percentual: float,
-    ) -> None:
-        agora = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(_SQL_REGISTRAR_CAPTURA, (
-            id_evento, simbolo, direcao, tempo.isoformat(), preco_varredura, pavio_percentual, agora,
-        ))
-        self._conn.commit()
-
-    def registrar_bos(
-            self,
-            id_evento: str,
-            simbolo: str,
-            direcao: str,
-            nivel_rompido: float,
-            swing_tempo: datetime,
-            tempo: datetime,
-            deslocamento: bool,
-    ) -> None:
-        agora = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(_SQL_REGISTRAR_BOS, (
-            id_evento, simbolo, direcao, tempo.isoformat(), nivel_rompido,
-            swing_tempo.isoformat(), int(deslocamento), agora,
-        ))
-        self._conn.commit()
-
-    def carregar_capturas_ativas(self, simbolo: str, cutoff: datetime) -> list[tuple]:
-        cursor = self._conn.execute(_SQL_CAPTURAS_ATIVAS, (simbolo, cutoff.isoformat()))
-        return cursor.fetchall()
-
-    def carregar_quebras_ativas(self, simbolo: str, cutoff: datetime) -> list[tuple]:
-        cursor = self._conn.execute(_SQL_QUEBRAS_ATIVAS, (simbolo, cutoff.isoformat()))
-        return cursor.fetchall()
-
     # --- Sinais ---
 
     def sinal_ja_disparado(self, id_sinal: str) -> bool:
@@ -278,6 +176,22 @@ class Repositorio:
             ob.preco_topo, ob.preco_fundo,
             fvg.preco_topo, fvg.preco_fundo,
             agora,
+        ))
+        self._conn.commit()
+
+    def registrar_sinal_v2(
+        self,
+        id_sinal: str,
+        setup_id: str,
+        simbolo: str,
+        direcao: str,
+        poi_fundo: float,
+        poi_topo: float,
+    ) -> None:
+        agora = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(_SQL_INSERIR_SINAL, (
+            id_sinal, simbolo, setup_id, setup_id,
+            direcao, poi_topo, poi_fundo, poi_topo, poi_fundo, agora,
         ))
         self._conn.commit()
 
@@ -347,3 +261,8 @@ class Repositorio:
             id_conf, setup_id, simbolo, tipo, preco, tempo.isoformat(), sl, tp, rr,
         ))
         self._conn.commit()
+
+    def limpar_setups_antigos(self, cutoff: datetime) -> int:
+        cursor = self._conn.execute(_SQL_LIMPAR_SETUPS_ANTIGOS, (cutoff.isoformat(),))
+        self._conn.commit()
+        return cursor.rowcount

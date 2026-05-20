@@ -92,14 +92,19 @@ O `ob` é qualquer objeto com atributos `preco_fundo` e `preco_topo` (duck typin
 ---
 
 ### `calcular_bias_d1_v2(velas_d1: pd.DataFrame, simbolo: str, periodo_swing: int) -> str | None`
-Retorna a direção do bias D1 baseado no evento estrutural mais recente.
+Retorna a direção do bias D1 canônico — confirmado apenas por BOS, não por ChoCH.
 
 **Algoritmo:**
 1. Chama `detectar_eventos_estrutura(velas_d1, simbolo, periodo_swing)` — state machine ChoCH/BOS
 2. Se não há eventos → retorna `None`
-3. Retorna `eventos[-1].direcao` (direção do evento mais recente)
+3. Se `eventos[-1].tipo == "BOS"` → retorna `eventos[-1].direcao` (bias confirmado)
+4. Se `eventos[-1].tipo == "ChoCH"` → retorna `None` (reversão potencial sem BOS confirmador; bias incerto)
 
-Mais robusto que `calcular_bias_d1` pois usa a state machine completa (HH/HL/LH/LL) em vez de apenas 2 swings consecutivos.
+**Racional canônico (ICT/SMC):**
+- **BOS** = estrutura confirmada na direção; bias definido
+- **ChoCH** = primeiro sinal de reversão potencial; bias permanece incerto até que um BOS na mesma direção confirme
+
+Mais robusto que `calcular_bias_d1` pois usa a state machine completa (HH/HL/LH/LL) em vez de apenas 2 swings consecutivos, e não antecipa o bias antes da confirmação estrutural.
 
 ---
 
@@ -120,9 +125,12 @@ Mais preciso que `verificar_zona_premium_discount` pois usa o range estrutural r
 
 | # | Função | Cenário | Esperado |
 |---|--------|---------|----------|
-| F14 | `calcular_bias_d1_v2` | Último evento é BOS/ChoCH ALTA | `"ALTA"` |
-| F15 | `calcular_bias_d1_v2` | Último evento é BOS/ChoCH BAIXA | `"BAIXA"` |
+| F14 | `calcular_bias_d1_v2` | Último evento é **BOS** ALTA | `"ALTA"` |
+| F15 | `calcular_bias_d1_v2` | Último evento é **BOS** BAIXA | `"BAIXA"` |
 | F16 | `calcular_bias_d1_v2` | Sem eventos estruturais detectados | `None` |
+| F21 | `calcular_bias_d1_v2` | Último evento é ChoCH ALTA (sem BOS posterior) | `None` |
+| F22 | `calcular_bias_d1_v2` | Último evento é ChoCH BAIXA (sem BOS posterior) | `None` |
+| F25 | `calcular_bias_d1_v2` | ChoCH ALTA seguido de BOS ALTA (confirmado) | `"ALTA"` |
 | F17 | `verificar_zona_premium_discount_v2` | ALTA, preço abaixo do equilíbrio | `True` |
 | F18 | `verificar_zona_premium_discount_v2` | ALTA, preço acima do equilíbrio | `False` |
 | F19 | `verificar_zona_premium_discount_v2` | BAIXA, preço acima do equilíbrio | `True` |

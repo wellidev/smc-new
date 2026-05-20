@@ -248,46 +248,101 @@ class TestCalcularRiscoRr:
 
 class TestCalcularBiasD1V2:
     """
-    30 D1 candles (periodo_swing=2).
+    Fixtures com 30 D1 candles (periodo_swing=2).
 
-    ALTA fixture: downtrend (H1/L1/LH/LL) → ChoCH ALTA at idx 16.
-    BAIXA fixture: uptrend (L1/H1/HL/HH) → ChoCH BAIXA at idx 16.
+    ChoCH = sinal de reversão potencial; bias incerto até BOS confirmador.
+    BOS   = estrutura confirmada na direção; bias definido.
+
+    Fixtures:
+      _velas_choch_alta:          downtrend → ChoCH ALTA (sem BOS posterior)
+      _velas_choch_baixa:         uptrend  → ChoCH BAIXA (sem BOS posterior)
+      _velas_bos_alta:            uptrend puro com dois BOS ALTA
+      _velas_bos_baixa:           downtrend puro com dois BOS BAIXA
+      _velas_choch_alta_confirmado: downtrend → ChoCH ALTA → BOS ALTA
     """
 
-    def _velas_bias_alta(self) -> pd.DataFrame:
+    def _velas_choch_alta(self) -> pd.DataFrame:
+        """H1→L1→H2(LH)→L2(BOS BAIXA)→H3(ChoCH ALTA). Último evento: ChoCH ALTA."""
         n = 30
         ts = _ts(n)
         base, step = 1.1000, 0.0010
         linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
-        linhas[4] = _vela_d1(ts[4], base, base + 0.0040, base - step, base)   # H1
-        linhas[7] = _vela_d1(ts[7], base, base + step, base - 0.0040, base)   # L1
-        linhas[10] = _vela_d1(ts[10], base, base + 0.0020, base - step, base) # H2 < H1 (LH)
-        linhas[13] = _vela_d1(ts[13], base, base + step, base - 0.0080, base) # L2 < L1 (BOS BAIXA)
-        linhas[16] = _vela_d1(ts[16], base, base + 0.0030, base - step, base) # H3 > H2 (ChoCH ALTA)
+        linhas[4]  = _vela_d1(ts[4],  base, base + 0.0040, base - step, base)   # H1
+        linhas[7]  = _vela_d1(ts[7],  base, base + step,   base - 0.0040, base) # L1
+        linhas[10] = _vela_d1(ts[10], base, base + 0.0020, base - step, base)   # H2 < H1 (LH)
+        linhas[13] = _vela_d1(ts[13], base, base + step,   base - 0.0080, base) # L2 < L1 (BOS BAIXA)
+        linhas[16] = _vela_d1(ts[16], base, base + 0.0030, base - step, base)   # H3 > H2 (ChoCH ALTA)
         return _df(linhas)
 
-    def _velas_bias_baixa(self) -> pd.DataFrame:
+    def _velas_choch_baixa(self) -> pd.DataFrame:
+        """L1→H1→L2(HL)→H2(BOS ALTA)→L3(ChoCH BAIXA). Último evento: ChoCH BAIXA."""
         n = 30
         ts = _ts(n)
         base, step = 1.1000, 0.0010
         linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
-        linhas[4] = _vela_d1(ts[4], base, base + step, base - 0.0040, base)   # L1
-        linhas[7] = _vela_d1(ts[7], base, base + 0.0040, base - step, base)   # H1
-        linhas[10] = _vela_d1(ts[10], base, base + step, base - 0.0020, base) # L2 > L1 (HL)
-        linhas[13] = _vela_d1(ts[13], base, base + 0.0080, base - step, base) # H2 > H1 (BOS ALTA)
-        linhas[16] = _vela_d1(ts[16], base, base + step, base - 0.0030, base) # L3 < L2 (ChoCH BAIXA)
+        linhas[4]  = _vela_d1(ts[4],  base, base + step,   base - 0.0040, base) # L1
+        linhas[7]  = _vela_d1(ts[7],  base, base + 0.0040, base - step, base)   # H1
+        linhas[10] = _vela_d1(ts[10], base, base + step,   base - 0.0020, base) # L2 > L1 (HL)
+        linhas[13] = _vela_d1(ts[13], base, base + 0.0080, base - step, base)   # H2 > H1 (BOS ALTA)
+        linhas[16] = _vela_d1(ts[16], base, base + step,   base - 0.0030, base) # L3 < L2 (ChoCH BAIXA)
         return _df(linhas)
 
-    def test_bias_alta(self):
-        # F14: last event is ChoCH ALTA
-        assert calcular_bias_d1_v2(self._velas_bias_alta(), "EURUSD", periodo_swing=2) == "ALTA"
+    def _velas_bos_alta(self) -> pd.DataFrame:
+        """H1(idx=8)→H2(idx=18): dois BOS ALTA consecutivos. Último evento: BOS ALTA."""
+        n = 30
+        ts = _ts(n)
+        base, step = 1.1000, 0.0010
+        linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
+        linhas[8]  = _vela_d1(ts[8],  base, base + 0.0040, base - step, base) # H1 → BOS ALTA
+        linhas[18] = _vela_d1(ts[18], base, base + 0.0080, base - step, base) # H2 → BOS ALTA (último)
+        return _df(linhas)
 
-    def test_bias_baixa(self):
-        # F15: last event is ChoCH BAIXA
-        assert calcular_bias_d1_v2(self._velas_bias_baixa(), "EURUSD", periodo_swing=2) == "BAIXA"
+    def _velas_bos_baixa(self) -> pd.DataFrame:
+        """L1(idx=8)→L2(idx=18): dois BOS BAIXA consecutivos. Último evento: BOS BAIXA."""
+        n = 30
+        ts = _ts(n)
+        base, step = 1.1000, 0.0010
+        linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
+        linhas[8]  = _vela_d1(ts[8],  base, base + step, base - 0.0040, base) # L1 → BOS BAIXA
+        linhas[18] = _vela_d1(ts[18], base, base + step, base - 0.0080, base) # L2 → BOS BAIXA (último)
+        return _df(linhas)
+
+    def _velas_choch_alta_confirmado(self) -> pd.DataFrame:
+        """ChoCH ALTA (idx=16) seguido de BOS ALTA (idx=22). Último evento: BOS ALTA."""
+        n = 30
+        ts = _ts(n)
+        base, step = 1.1000, 0.0010
+        linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
+        linhas[4]  = _vela_d1(ts[4],  base, base + 0.0040, base - step, base)   # H1
+        linhas[7]  = _vela_d1(ts[7],  base, base + step,   base - 0.0040, base) # L1
+        linhas[10] = _vela_d1(ts[10], base, base + 0.0020, base - step, base)   # H2 < H1 (LH)
+        linhas[13] = _vela_d1(ts[13], base, base + step,   base - 0.0080, base) # L2 < L1 (BOS BAIXA)
+        linhas[16] = _vela_d1(ts[16], base, base + 0.0030, base - step, base)   # H3 > H2 (ChoCH ALTA)
+        linhas[22] = _vela_d1(ts[22], base, base + 0.0060, base - step, base)   # H4 > H3 (BOS ALTA)
+        return _df(linhas)
+
+    def test_choch_alta_sem_confirmacao_retorna_none(self):
+        # F21: ChoCH ALTA como último evento (sem BOS confirmador) → None
+        assert calcular_bias_d1_v2(self._velas_choch_alta(), "EURUSD", periodo_swing=2) is None
+
+    def test_choch_baixa_sem_confirmacao_retorna_none(self):
+        # F22: ChoCH BAIXA como último evento (sem BOS confirmador) → None
+        assert calcular_bias_d1_v2(self._velas_choch_baixa(), "EURUSD", periodo_swing=2) is None
+
+    def test_bos_alta_retorna_alta(self):
+        # F23: BOS ALTA como último evento → "ALTA"
+        assert calcular_bias_d1_v2(self._velas_bos_alta(), "EURUSD", periodo_swing=2) == "ALTA"
+
+    def test_bos_baixa_retorna_baixa(self):
+        # F24: BOS BAIXA como último evento → "BAIXA"
+        assert calcular_bias_d1_v2(self._velas_bos_baixa(), "EURUSD", periodo_swing=2) == "BAIXA"
+
+    def test_choch_confirmado_por_bos_retorna_direcao(self):
+        # F25: ChoCH ALTA seguido de BOS ALTA → bias confirmado → "ALTA"
+        assert calcular_bias_d1_v2(self._velas_choch_alta_confirmado(), "EURUSD", periodo_swing=2) == "ALTA"
 
     def test_sem_eventos_retorna_none(self):
-        # F16: flat market → no swings → no events → None
+        # F16: mercado flat → sem swings → sem eventos → None
         ts = _ts(10)
         linhas = [_vela_d1(ts[i], 1.1000, 1.1010, 1.0990, 1.1000) for i in range(10)]
         assert calcular_bias_d1_v2(_df(linhas), "EURUSD", periodo_swing=2) is None
@@ -337,3 +392,27 @@ class TestVerificarZonaPremiumDiscountV2:
         ts = _ts(5)
         linhas = [_vela_d1(ts[i], 1.1000, 1.1010, 1.0990, 1.1000) for i in range(5)]
         assert verificar_zona_premium_discount_v2(_df(linhas), 1.1000, "ALTA", 2) is False
+
+    def test_usa_swing_mais_recente_nao_extremo(self):
+        """
+        26 candles, periodo_swing=3.
+        SH1 idx=5:  maxima=1.200 (older, absolute highest)
+        SL1 idx=11: minima=1.070 (older, absolute lowest)
+        SH2 idx=17: maxima=1.165 (recent, lower than SH1)
+        SL2 idx=21: minima=1.085 (recent, higher than SL1)
+
+        New equilibrium = (1.165 + 1.085) / 2 = 1.125  →  preco=1.130 > 1.125 → BAIXA=True
+        Old equilibrium = (1.200 + 1.070) / 2 = 1.135  →  preco=1.130 < 1.135 → BAIXA=False
+        """
+        ts = _ts(26)
+        # baseline: maxima=1.100+i*0.0005, minima=1.090+i*0.0005 (slowly ascending)
+        linhas = [
+            _vela_d1(ts[i], 1.1000, 1.1000 + i * 0.0005, 1.0900 + i * 0.0005, 1.1000)
+            for i in range(26)
+        ]
+        linhas[5]  = _vela_d1(ts[5],  1.1800, 1.2000, 1.0925, 1.1800)  # SH1: max=1.200
+        linhas[11] = _vela_d1(ts[11], 1.0800, 1.1055, 1.0700, 1.0800)  # SL1: min=1.070
+        linhas[17] = _vela_d1(ts[17], 1.1500, 1.1650, 1.0985, 1.1500)  # SH2: max=1.165
+        linhas[21] = _vela_d1(ts[21], 1.0900, 1.1105, 1.0850, 1.0900)  # SL2: min=1.085
+        df = _df(linhas)
+        assert verificar_zona_premium_discount_v2(df, 1.130, "BAIXA", periodo_swing=3) is True

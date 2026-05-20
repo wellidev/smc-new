@@ -1,7 +1,7 @@
 import hashlib
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -64,7 +64,7 @@ def detectar_captura_liquidez(
     swings_bearish_vistos: set[float] = set()
     swings_bullish_vistos: set[float] = set()
 
-    janela_inicio = max(periodo_swing, len(velas_h4) - 15 - 1)
+    janela_inicio = max(periodo_swing, len(velas_h4) - 50 - 1)
     for i in range(janela_inicio, len(velas_h4)):
         vela = velas_h4.iloc[i]
         range_vela = vela["maxima"] - vela["minima"]
@@ -107,31 +107,22 @@ def detectar_captura_liquidez(
     return capturas
 
 
-def mapear_zonas_interesse(
-    velas_h4: pd.DataFrame,
-    simbolo: str,
-) -> tuple[list[OrderBlock], list[FairValueGap]]:
-    order_blocks = _detectar_order_blocks(velas_h4, simbolo)
-    fvgs = _detectar_fvgs(velas_h4, simbolo)
+def pool_varrido_por_sweep(
+    pool: PoolLiquidez, capturas: list[CapturaLiquidez]
+) -> CapturaLiquidez | None:
+    """Retorna a CapturaLiquidez que varreu o nível do pool, ou None.
 
-    # Exclui a última vela (ainda aberta) da marcação — MT5 retorna o tick atual
-    # como "fechamento" da vela em andamento, o que causaria mitigação prematura.
-    velas_fechadas = velas_h4.iloc[:-1]
-    _marcar_obs_mitigados(order_blocks, velas_fechadas)
-    _marcar_fvgs_mitigados(fvgs, velas_fechadas)
-    _marcar_obs_testados(order_blocks, velas_fechadas)
-    _marcar_fvgs_testados(fvgs, velas_fechadas)
-
-    obs_ativos = [ob for ob in order_blocks if not ob.mitigado]
-    fvgs_ativos = [fvg for fvg in fvgs if not fvg.mitigado]
-
-    obs_virgens = sum(1 for ob in obs_ativos if not ob.testado)
-    fvgs_virgens = sum(1 for fvg in fvgs_ativos if not fvg.testado)
-    logger.debug(
-        "OBs ativos: %d (%d virgens) | FVGs ativos: %d (%d virgens)",
-        len(obs_ativos), obs_virgens, len(fvgs_ativos), fvgs_virgens,
-    )
-    return obs_ativos, fvgs_ativos
+    Pools EQH/PDH (liquidez acima) exigem captura BAIXA próxima ao nível.
+    Pools EQL/PDL (liquidez abaixo) exigem captura ALTA.
+    Proximidade limitada por ``pool.tolerancia``.
+    O caller usa ``captura.tempo`` como âncora temporal para filtrar eventos
+    estruturais posteriores ao sweep (não à criação do pool).
+    """
+    direcao_sweep = "BAIXA" if pool.tipo in ("EQH", "PDH") else "ALTA"
+    for c in capturas:
+        if c.direcao == direcao_sweep and abs(c.preco_varredura - pool.preco) <= pool.tolerancia:
+            return c
+    return None
 
 
 def calcular_swings(
@@ -163,153 +154,24 @@ def _ultimo_swing_anterior(swings: dict[int, float], indice_atual: int) -> tuple
     return idx, swings[idx]
 
 
-def _detectar_order_blocks(velas: pd.DataFrame, simbolo: str) -> list[OrderBlock]:
-    obs: list[OrderBlock] = []
-
-    inicio = max(0, len(velas) - 100)
-    for i in range(inicio, len(velas) - 3):
-        vela = velas.iloc[i]
-        corpo = float(vela["fechamento"]) - float(vela["abertura"])
-        e_bearish = corpo < 0
-        e_bullish = corpo > 0
-
-        proximas = velas.iloc[i + 1: i + 4]
-
-        if e_bearish:
-            proximo_nao_bearish = float(proximas.iloc[0]["fechamento"]) >= float(proximas.iloc[0]["abertura"])
-            corpos_proximas = proximas["fechamento"] - proximas["abertura"]
-            impulso_bullish = (corpos_proximas > 0).all()
-            fechamentos_crescentes = (proximas["fechamento"].diff().dropna() > 0).all()
-            corpo_ob = abs(corpo)
-            proximo_corpo = float(proximas.iloc[0]["fechamento"]) - float(proximas.iloc[0]["abertura"])
-            engolfo = proximo_corpo > 1.5 * corpo_ob if corpo_ob > 0 else False
-
-            if proximo_nao_bearish and (impulso_bullish or fechamentos_crescentes or engolfo):
-                obs.append(OrderBlock(
-                    id=_gerar_id(simbolo, vela),
-                    simbolo=simbolo,
-                    direcao="ALTA",
-                    preco_topo=float(vela["maxima"]),
-                    preco_fundo=float(vela["minima"]),
-                    tempo=_tempo_da_vela(vela),
-                ))
-
-        if e_bullish:
-            proximo_nao_bullish = float(proximas.iloc[0]["fechamento"]) <= float(proximas.iloc[0]["abertura"])
-            corpos_proximas = proximas["fechamento"] - proximas["abertura"]
-            impulso_bearish = (corpos_proximas < 0).all()
-            fechamentos_decrescentes = (proximas["fechamento"].diff().dropna() < 0).all()
-            corpo_ob = abs(corpo)
-            proximo_corpo = float(proximas.iloc[0]["abertura"]) - float(proximas.iloc[0]["fechamento"])
-            engolfo = proximo_corpo > 1.5 * corpo_ob if corpo_ob > 0 else False
-
-            if proximo_nao_bullish and (impulso_bearish or fechamentos_decrescentes or engolfo):
-                obs.append(OrderBlock(
-                    id=_gerar_id(simbolo, vela),
-                    simbolo=simbolo,
-                    direcao="BAIXA",
-                    preco_topo=float(vela["maxima"]),
-                    preco_fundo=float(vela["minima"]),
-                    tempo=_tempo_da_vela(vela),
-                ))
-
-    return obs
-
-
-def _detectar_fvgs(velas: pd.DataFrame, simbolo: str) -> list[FairValueGap]:
-    fvgs: list[FairValueGap] = []
-
-    inicio = max(0, len(velas) - 100)
-    for i in range(inicio, len(velas) - 2):
-        v0 = velas.iloc[i]
-        v2 = velas.iloc[i + 2]
-        tempo_fvg = _tempo_da_vela(velas.iloc[i + 2])
-
-        if float(v0["maxima"]) < float(v2["minima"]):
-            fvgs.append(FairValueGap(
-                id=_gerar_id(simbolo, velas.iloc[i + 1]),
-                simbolo=simbolo,
-                direcao="ALTA",
-                preco_topo=float(v2["minima"]),
-                preco_fundo=float(v0["maxima"]),
-                tempo=tempo_fvg,
-            ))
-
-        elif float(v0["minima"]) > float(v2["maxima"]):
-            fvgs.append(FairValueGap(
-                id=_gerar_id(simbolo, velas.iloc[i + 1]),
-                simbolo=simbolo,
-                direcao="BAIXA",
-                preco_topo=float(v0["minima"]),
-                preco_fundo=float(v2["maxima"]),
-                tempo=tempo_fvg,
-            ))
-
-    return fvgs
-
-
-def _marcar_obs_mitigados(obs: list[OrderBlock], velas: pd.DataFrame) -> None:
-    for ob in obs:
-        velas_pos = velas[velas["tempo"] > ob.tempo]
-        for _, v in velas_pos.iterrows():
-            close = float(v["fechamento"])
-            # Mitigado apenas quando o fechamento perfura além da zona:
-            # OB ALTA (demanda): close abaixo do fundo indica que a zona foi rompida para baixo.
-            # OB BAIXA (oferta): close acima do topo indica que a zona foi rompida para cima.
-            # Um simples toque ou teste (close dentro da zona) NÃO mitiga — é sinal de entrada válido.
-            if ob.direcao == "ALTA" and close < ob.preco_fundo:
-                ob.mitigado = True
-                break
-            elif ob.direcao == "BAIXA" and close > ob.preco_topo:
-                ob.mitigado = True
-                break
-
-
-def _marcar_obs_testados(obs: list[OrderBlock], velas: pd.DataFrame) -> None:
-    for ob in obs:
-        if ob.mitigado:
-            continue
-        velas_pos = velas[velas["tempo"] > ob.tempo]
-        for _, v in velas_pos.iterrows():
-            if ob.direcao == "ALTA":
-                if float(v["abertura"]) >= ob.preco_topo and float(v["minima"]) <= ob.preco_topo:
-                    ob.testado = True
-                    break
-            else:
-                if float(v["abertura"]) <= ob.preco_fundo and float(v["maxima"]) >= ob.preco_fundo:
-                    ob.testado = True
-                    break
-
-
-def _marcar_fvgs_testados(fvgs: list[FairValueGap], velas: pd.DataFrame) -> None:
-    for fvg in fvgs:
-        if fvg.mitigado:
-            continue
-        velas_pos = velas[velas["tempo"] > fvg.tempo]
-        for _, v in velas_pos.iterrows():
-            if fvg.direcao == "ALTA":
-                if float(v["abertura"]) >= fvg.preco_topo and float(v["minima"]) <= fvg.preco_topo:
-                    fvg.testado = True
-                    break
-            else:
-                if float(v["abertura"]) <= fvg.preco_fundo and float(v["maxima"]) >= fvg.preco_fundo:
-                    fvg.testado = True
-                    break
-
-
 def _marcar_fvgs_mitigados(fvgs: list[FairValueGap], velas: pd.DataFrame) -> None:
     for fvg in fvgs:
         gap = fvg.preco_topo - fvg.preco_fundo
         meio_gap = fvg.preco_fundo + gap * 0.5
         velas_pos = velas[velas["tempo"] > fvg.tempo]
         for _, v in velas_pos.iterrows():
-            # Mitigado quando o preço alcança ao menos 50% do gap
-            if fvg.direcao == "ALTA" and float(v["minima"]) <= meio_gap:
+            # Mitigado quando o FECHAMENTO atinge ao menos 50% do gap (wick não mitiga)
+            if fvg.direcao == "ALTA" and float(v["fechamento"]) <= meio_gap:
                 fvg.mitigado = True
                 break
-            if fvg.direcao == "BAIXA" and float(v["maxima"]) >= meio_gap:
+            if fvg.direcao == "BAIXA" and float(v["fechamento"]) >= meio_gap:
                 fvg.mitigado = True
                 break
+            # Testado quando wick entra na zona sem mitigar (zona usada mas ainda ativa)
+            if fvg.direcao == "ALTA" and float(v["minima"]) < fvg.preco_topo:
+                fvg.testado = True
+            elif fvg.direcao == "BAIXA" and float(v["maxima"]) > fvg.preco_fundo:
+                fvg.testado = True
 
 
 def _gerar_id(simbolo: str, vela: pd.Series) -> str:
@@ -651,26 +513,58 @@ def calcular_poi_composta(
     fvgs: list[FairValueGap],
     fallback_nivel: float,
 ) -> tuple[float, float]:
-    """Composite POI envelope from active OBs + FVGs of the same leg."""
-    ativos = [(o.preco_fundo, o.preco_topo) for o in obs if not o.mitigado]
-    ativos += [(f.preco_fundo, f.preco_topo) for f in fvgs if not f.mitigado]
-    if not ativos:
-        return fallback_nivel, fallback_nivel
-    poi_fundo = min(p[0] for p in ativos)
-    poi_topo = max(p[1] for p in ativos)
-    return poi_fundo, poi_topo
+    """POI Composta como a interseção geométrica real de OBs e FVGs ativos.
+
+    Prioridade (veja spec_analisador_smc.md → calcular_poi_composta):
+      1. Se existir qualquer interseção OB∩FVG válida (inf < sup, estrita) → retorna o
+         envelope de todas as interseções válidas.
+      2. Caso contrário, se existirem OBs ativos → retorna o envelope dos OBs.
+      3. Caso contrário, se existirem apenas FVGs ativos → retorna o envelope dos FVGs.
+      4. Fallback: (fallback_nivel, fallback_nivel).
+    """
+    obs_ativos = [o for o in obs if not o.mitigado]
+    fvgs_ativos = [f for f in fvgs if not f.mitigado]
+
+    intersecoes: list[tuple[float, float]] = []
+    for ob in obs_ativos:
+        for fvg in fvgs_ativos:
+            inf = max(ob.preco_fundo, fvg.preco_fundo)
+            sup = min(ob.preco_topo, fvg.preco_topo)
+            if inf < sup:
+                intersecoes.append((inf, sup))
+
+    if intersecoes:
+        poi_fundo = min(z[0] for z in intersecoes)
+        poi_topo = max(z[1] for z in intersecoes)
+        return poi_fundo, poi_topo
+
+    if obs_ativos:
+        poi_fundo = min(o.preco_fundo for o in obs_ativos)
+        poi_topo = max(o.preco_topo for o in obs_ativos)
+        return poi_fundo, poi_topo
+
+    if fvgs_ativos:
+        poi_fundo = min(f.preco_fundo for f in fvgs_ativos)
+        poi_topo = max(f.preco_topo for f in fvgs_ativos)
+        return poi_fundo, poi_topo
+
+    return fallback_nivel, fallback_nivel
 
 
 def _marcar_obs_v2_mitigados(obs: list[OrderBlockV2], velas: pd.DataFrame) -> None:
     for ob in obs:
         for _, v in velas[velas["tempo"] > ob.tempo].iterrows():
-            close = float(v["fechamento"])
-            if ob.direcao == "ALTA" and close < ob.preco_fundo:
+            if ob.direcao == "ALTA" and float(v["minima"]) <= ob.zona_50:
                 ob.mitigado = True
                 break
-            elif ob.direcao == "BAIXA" and close > ob.preco_topo:
+            elif ob.direcao == "BAIXA" and float(v["maxima"]) >= ob.zona_50:
                 ob.mitigado = True
                 break
+            # Testado quando wick entra na zona sem atingir o zona_50 (mitigação)
+            if ob.direcao == "ALTA" and float(v["minima"]) <= ob.preco_topo:
+                ob.testado = True
+            elif ob.direcao == "BAIXA" and float(v["maxima"]) >= ob.preco_fundo:
+                ob.testado = True
 
 
 # ---------------------------------------------------------------------------
@@ -771,55 +665,92 @@ def detectar_mss_no_poi(
     poi_topo: float,
     direcao: str,
     simbolo: str,
+    cutoff: datetime | None = None,
+    atr: float = 0.0,
 ) -> ConfirmacaoEntrada | None:
-    """Detect Market Structure Shift on M5 within the POI zone."""
-    velas_poi = velas_m5[
-        (velas_m5["maxima"] >= poi_fundo) & (velas_m5["minima"] <= poi_topo)
+    """Detect Market Structure Shift (ChoCH LTF) on M5 within the POI zone.
+
+    Canonical sequence:
+      - ALTA: micro-swing LOW dentro da POI, depois micro-swing HIGH, e por
+        fim uma vela fecha acima do swing HIGH (ChoCH bullish).
+      - BAIXA: micro-swing HIGH, depois micro-swing LOW, e por fim uma vela
+        fecha abaixo do swing LOW (ChoCH bearish).
+
+    Requer no mínimo 5 velas dentro da POI para que `calcular_swings` com
+    `periodo=2` consiga identificar micro-swings.
+    """
+    df = velas_m5
+    if cutoff is not None:
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.replace(tzinfo=timezone.utc)
+        ts = pd.to_datetime(df["tempo"], utc=True)
+        df = df[ts > pd.Timestamp(cutoff)]
+
+    velas_poi = df[
+        (df["maxima"] >= poi_fundo) & (df["minima"] <= poi_topo)
     ].reset_index(drop=True)
 
-    if len(velas_poi) < 2:
+    if len(velas_poi) < 5:
         return None
 
-    for i in range(1, len(velas_poi)):
-        v_prev = velas_poi.iloc[i - 1]
-        v_curr = velas_poi.iloc[i]
+    swings_high, swings_low = calcular_swings(velas_poi, periodo=2)
 
-        if direcao == "ALTA":
-            prev_bearish = float(v_prev["fechamento"]) < float(v_prev["abertura"])
-            curr_breaks_high = float(v_curr["fechamento"]) > float(v_prev["abertura"])
-            if prev_bearish and curr_breaks_high:
-                preco = float(v_curr["fechamento"])
-                sl, tp, rr = _calcular_risco_rr_v2(preco, poi_fundo, poi_topo, direcao)
-                tempo = _tempo_da_vela(v_curr)
-                return ConfirmacaoEntrada(
-                    id=gerar_id_confirmacao(simbolo, "", tempo),
-                    setup_id="",
-                    simbolo=simbolo,
-                    tipo_confirmacao="MSS",
-                    preco_confirmacao=preco,
-                    tempo=tempo,
-                    sl=sl,
-                    tp=tp,
-                    rr=rr,
-                )
-        else:
-            prev_bullish = float(v_prev["fechamento"]) > float(v_prev["abertura"])
-            curr_breaks_low = float(v_curr["fechamento"]) < float(v_prev["abertura"])
-            if prev_bullish and curr_breaks_low:
-                preco = float(v_curr["fechamento"])
-                sl, tp, rr = _calcular_risco_rr_v2(preco, poi_fundo, poi_topo, direcao)
-                tempo = _tempo_da_vela(v_curr)
-                return ConfirmacaoEntrada(
-                    id=gerar_id_confirmacao(simbolo, "", tempo),
-                    setup_id="",
-                    simbolo=simbolo,
-                    tipo_confirmacao="MSS",
-                    preco_confirmacao=preco,
-                    tempo=tempo,
-                    sl=sl,
-                    tp=tp,
-                    rr=rr,
-                )
+    if direcao == "ALTA":
+        # Para cada swing LOW em ordem cronológica, procurar o primeiro swing
+        # HIGH posterior e então uma vela que feche acima desse swing HIGH.
+        for sl_idx in sorted(swings_low.keys()):
+            sh_candidates = {idx: p for idx, p in swings_high.items() if idx > sl_idx}
+            if not sh_candidates:
+                continue
+            sh_idx = min(sh_candidates.keys())
+            sh_price = sh_candidates[sh_idx]
+            for j in range(sh_idx + 1, len(velas_poi)):
+                v = velas_poi.iloc[j]
+                if float(v["fechamento"]) > sh_price:
+                    preco = float(v["fechamento"])
+                    rr_result = _calcular_risco_rr_v2(preco, poi_fundo, poi_topo, direcao, atr)
+                    if rr_result is None:
+                        continue
+                    sl, tp, rr = rr_result
+                    tempo = _tempo_da_vela(v)
+                    return ConfirmacaoEntrada(
+                        id=gerar_id_confirmacao(simbolo, "", tempo),
+                        setup_id="",
+                        simbolo=simbolo,
+                        tipo_confirmacao="MSS",
+                        preco_confirmacao=preco,
+                        tempo=tempo,
+                        sl=sl,
+                        tp=tp,
+                        rr=rr,
+                    )
+    else:  # BAIXA — simétrico
+        for sh_idx in sorted(swings_high.keys()):
+            sl_candidates = {idx: p for idx, p in swings_low.items() if idx > sh_idx}
+            if not sl_candidates:
+                continue
+            sl_idx = min(sl_candidates.keys())
+            sl_price = sl_candidates[sl_idx]
+            for j in range(sl_idx + 1, len(velas_poi)):
+                v = velas_poi.iloc[j]
+                if float(v["fechamento"]) < sl_price:
+                    preco = float(v["fechamento"])
+                    rr_result = _calcular_risco_rr_v2(preco, poi_fundo, poi_topo, direcao, atr)
+                    if rr_result is None:
+                        continue
+                    sl, tp, rr = rr_result
+                    tempo = _tempo_da_vela(v)
+                    return ConfirmacaoEntrada(
+                        id=gerar_id_confirmacao(simbolo, "", tempo),
+                        setup_id="",
+                        simbolo=simbolo,
+                        tipo_confirmacao="MSS",
+                        preco_confirmacao=preco,
+                        tempo=tempo,
+                        sl=sl,
+                        tp=tp,
+                        rr=rr,
+                    )
 
     return None
 
@@ -828,12 +759,11 @@ def calcular_score_setup(
     evento: EventoEstrutura,
     leg: LegImpulso | None,
     pool: PoolLiquidez,
-    velas_d1: pd.DataFrame | None,
-    atr: float,
     tem_overlap_ob_fvg: bool = False,
     em_sessao: bool = False,
     zona_ok: bool = False,
     bias_alinhado: bool = False,
+    zona_virgem: bool = False,
 ) -> int:
     score = 0
     if evento.tipo == "ChoCH":
@@ -842,7 +772,9 @@ def calcular_score_setup(
         score += 15
     if leg is not None and leg.eh_displacement:
         score += 15
-    if pool.tipo in ("EQH", "EQL"):
+    if pool.tipo in ("PDH", "PDL"):
+        score += 15
+    elif pool.tipo in ("EQH", "EQL"):
         score += 10
     if tem_overlap_ob_fvg:
         score += 10
@@ -850,6 +782,8 @@ def calcular_score_setup(
         score += 10
     if zona_ok:
         score += 10
+    if zona_virgem:
+        score += 5
     return score
 
 
@@ -858,18 +792,27 @@ def _calcular_risco_rr_v2(
     poi_fundo: float,
     poi_topo: float,
     direcao: str,
-) -> tuple[float, float, float]:
+    atr: float = 0.0,
+) -> tuple[float, float, float] | None:
+    buffer = 0.1 * atr
     if direcao == "ALTA":
-        sl = poi_fundo
+        sl = poi_fundo - buffer
         risco = preco_entrada - sl
-        tp = preco_entrada + 2.0 * risco if risco > 0 else preco_entrada
+        tp = preco_entrada + 2.0 * risco
     else:
-        sl = poi_topo
+        sl = poi_topo + buffer
         risco = sl - preco_entrada
-        tp = preco_entrada - 2.0 * risco if risco > 0 else preco_entrada
+        tp = preco_entrada - 2.0 * risco
+    if risco <= 0:
+        return None
     return sl, tp, 2.0
 
 
 def _gerar_id_ob_v2(simbolo: str, leg_id: str, tempo: datetime) -> str:
     chave = f"{simbolo}|{leg_id}|{tempo.isoformat()}"
     return hashlib.sha1(chave.encode()).hexdigest()[:16]
+
+
+# Aliases públicos para funções de marcação usadas externamente
+marcar_obs_v2_mitigados = _marcar_obs_v2_mitigados
+marcar_fvgs_mitigados = _marcar_fvgs_mitigados

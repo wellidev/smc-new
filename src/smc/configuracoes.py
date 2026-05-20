@@ -33,6 +33,7 @@ TIMEFRAME_GATILHO: int = TIMEFRAME_M5
 VELAS_HISTORICO: int = 500
 VELAS_D1_HISTORICO: int = 50
 PERIODO_SWING: int = 10
+PERIODO_SWING_ESTRUTURA: int = 5   # periodo menor para ChoCH/BOS — reduz latência de ~40h para ~20h
 PERIODO_SWING_D1: int = 5
 LIMIAR_PAVIO: float = 0.30
 IDADE_MAX_EVENTO_H4: int = 15

@@ -13,7 +13,8 @@ Centralizar todos os parâmetros de configuração. Não contém lógica de neg�
 | `TIMEFRAME_D1` | `int` | `mt5.TIMEFRAME_D1` (fallback `16408`) | Timeframe diário para bias macro e premium/discount |
 | `VELAS_HISTORICO` | `int` | `500` | Janela de candles H4 carregados por símbolo |
 | `VELAS_D1_HISTORICO` | `int` | `50` | Janela de candles D1 para bias e premium/discount |
-| `PERIODO_SWING` | `int` | `10` | N candles em cada lado para swing H4 |
+| `PERIODO_SWING` | `int` | `10` | N candles em cada lado para swing H4 (captura de liquidez) |
+| `PERIODO_SWING_ESTRUTURA` | `int` | `5` | N candles em cada lado para ChoCH/BOS — janela menor reduz latência de ~40h para ~20h |
 | `PERIODO_SWING_D1` | `int` | `5` | N candles em cada lado para swing D1 (janela menor) |
 | `LIMIAR_PAVIO` | `float` | `0.30` | 30% do range total para validar captura de liquidez |
 | `SESSAO_LONDON_INICIO` | `int` | `8` | Hora UTC de início da sessão London |

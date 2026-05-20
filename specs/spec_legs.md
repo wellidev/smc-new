@@ -63,9 +63,11 @@ OB = última vela bullish (close > open) antes de sequência bearish dentro da l
   — Zona corpo: preco_topo = max(abertura, fechamento), preco_fundo = min(abertura, fechamento)
 ```
 
-**Mitigação (aplicada sobre velas_fechadas = velas_h4.iloc[:-1]):**
-- ALTA: `close < ob.preco_fundo` → mitigado
-- BAIXA: `close > ob.preco_topo` → mitigado
+**Mitigação e teste (aplicados sobre velas_fechadas = velas_h4.iloc[:-1]):**
+- ALTA: `minima <= ob.zona_50` → `ob.mitigado = True` (wick atinge 50% do corpo — zona consumida)
+- BAIXA: `maxima >= ob.zona_50` → `ob.mitigado = True`
+- ALTA: `minima <= ob.preco_topo` sem mitigar → `ob.testado = True` (wick entrou, zona usada mas ativa)
+- BAIXA: `maxima >= ob.preco_fundo` sem mitigar → `ob.testado = True`
 
 **ID:** `SHA1(simbolo|leg.tempo_inicio.isoformat()|str(indice))[:16]`
 
@@ -91,18 +93,21 @@ Retorna FVGs SEM verificar mitigação — a mitigação é responsabilidade do 
 
 ## Critério de POI Composto
 
-A zona de entrada do `SetupSMC` é calculada como:
+A zona de entrada do `SetupSMC` é calculada por `calcular_poi_composta(obs, fvgs, fallback_nivel)`, com a seguinte prioridade:
 
 ```
-obs_validos = [ob for ob in obs_corpo if not ob.mitigado and ob.direcao == direcao]
-fvgs_validos = [fvg for fvg in fvgs_leg if not fvg.mitigado and fvg.direcao == direcao]
+Para cada par (ob, fvg) com mesma direção:
+    inf = max(ob.preco_fundo, fvg.preco_fundo)
+    sup = min(ob.preco_topo,  fvg.preco_topo)
+    zona válida sse inf < sup  (estrito — fronteira coincidente NÃO conta)
 
-# Zona = envelope de todos os POIs ativos da leg
-poi_fundo = min(poi.preco_fundo for poi in obs_validos + fvgs_validos)
-poi_topo  = max(poi.preco_topo  for poi in obs_validos + fvgs_validos)
+1. Se há pelo menos uma interseção OB∩FVG → envelope das interseções: (min(inf_i), max(sup_i))
+2. Se não há interseção, mas há OBs ativos  → envelope dos OBs: (min(ob.fundo), max(ob.topo))
+3. Se só há FVGs ativos (sem OBs)           → envelope dos FVGs
+4. Fallback                                  → (fallback_nivel, fallback_nivel)
 ```
 
-Se não há POIs ativos: `poi_fundo = poi_topo = evento.nivel_rompido` (fallback ao nível de estrutura).
+A interseção real OB∩FVG representa a zona onde AMBAS as estruturas se confirmam — maior probabilidade de rejeição canônica. O fallback garante que sempre há um nível de referência mesmo sem POIs estruturados.
 
 ---
 
@@ -115,7 +120,7 @@ Se não há POIs ativos: `poi_fundo = poi_topo = evento.nivel_rompido` (fallback
 | 3 | `extrair_legs` — não displacement | range < 2×ATR | `eh_displacement=False` |
 | 4 | `detectar_obs_corpo` — zona usa corpo | vela bearish com sombras longas | `preco_topo = max(abertura, fechamento)` (não `maxima`) |
 | 5 | `detectar_obs_corpo` — última vela bearish | duas velas bearish consecutivas | somente a segunda (mais próxima do impulso) |
-| 6 | `detectar_obs_corpo` — mitigação | close abaixo do corpo OB ALTA | `ob.mitigado = True` |
+| 6 | `detectar_obs_corpo` — mitigação | wick (minima) atinge zona_50 do OB ALTA | `ob.mitigado = True` |
 | 7 | `extrair_fvgs_no_intervalo` — bullish | gap entre vela[i].maxima e vela[i+2].minima | `FairValueGap(direcao="ALTA")` |
 | 8 | `extrair_fvgs_no_intervalo` — fora do intervalo | FVG em candle antes do indice_inicio | não retornado |
 | 9 | `detectar_obs_corpo` — leg de 2 velas | leg muito curta | sem crash, retorna `[]` |

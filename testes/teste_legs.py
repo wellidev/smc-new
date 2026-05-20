@@ -6,13 +6,17 @@ import pandas as pd
 import pytest
 
 from smc.analisador_smc import (
+    FairValueGap,
     calcular_atr,
+    calcular_poi_composta,
     detectar_obs_corpo,
     detectar_eventos_estrutura,
     extrair_fvgs_no_intervalo,
     extrair_legs,
+    marcar_fvgs_mitigados,
+    marcar_obs_v2_mitigados,
 )
-from smc.modelos import LegImpulso
+from smc.modelos import LegImpulso, OrderBlockV2
 
 
 def _ts(n: int) -> list[datetime]:
@@ -236,3 +240,367 @@ class TestExtrairFvgsNoIntervalo:
         df = _df(linhas)
         fvgs = extrair_fvgs_no_intervalo(df, 3, 4, "EURUSD")
         assert isinstance(fvgs, list)
+
+
+class TestCalcularPoiComposta:
+    """Cenários para `calcular_poi_composta` — interseção real OB∩FVG.
+
+    Os objetos são construídos diretamente (sem DataFrame). Os valores de
+    `tempo`, `id`, `leg_id` são placeholders — só importam os preços e os
+    flags `mitigado`.
+    """
+
+    _T = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    def _ob(self, fundo: float, topo: float, mitigado: bool = False,
+            direcao: str = "ALTA") -> OrderBlockV2:
+        return OrderBlockV2(
+            id="ob",
+            simbolo="EURUSD",
+            direcao=direcao,
+            preco_topo=topo,
+            preco_fundo=fundo,
+            zona_50=(topo + fundo) / 2,
+            tempo=self._T,
+            leg_id="leg",
+            mitigado=mitigado,
+            testado=False,
+        )
+
+    def _fvg(self, fundo: float, topo: float, mitigado: bool = False,
+             direcao: str = "ALTA") -> FairValueGap:
+        return FairValueGap(
+            id="fvg",
+            simbolo="EURUSD",
+            direcao=direcao,
+            preco_topo=topo,
+            preco_fundo=fundo,
+            tempo=self._T,
+            mitigado=mitigado,
+            testado=False,
+        )
+
+    def test_intersecao_unica(self):
+        obs = [self._ob(1.1000, 1.1060)]
+        fvgs = [self._fvg(1.1040, 1.1080)]
+        poi_fundo, poi_topo = calcular_poi_composta(obs, fvgs, 1.0)
+        assert poi_fundo == pytest.approx(1.1040)
+        assert poi_topo == pytest.approx(1.1060)
+
+    def test_sem_intersecao_cai_para_obs(self):
+        obs = [self._ob(1.1000, 1.1050)]
+        fvgs = [self._fvg(1.1070, 1.1100)]
+        poi_fundo, poi_topo = calcular_poi_composta(obs, fvgs, 1.0)
+        assert poi_fundo == pytest.approx(1.1000)
+        assert poi_topo == pytest.approx(1.1050)
+
+    def test_so_obs_retorna_envelope_dos_obs(self):
+        obs = [self._ob(1.1000, 1.1050), self._ob(1.1030, 1.1080)]
+        fvgs: list[FairValueGap] = []
+        poi_fundo, poi_topo = calcular_poi_composta(obs, fvgs, 1.0)
+        assert poi_fundo == pytest.approx(1.1000)
+        assert poi_topo == pytest.approx(1.1080)
+
+    def test_so_fvgs_retorna_envelope_dos_fvgs(self):
+        obs: list[OrderBlockV2] = []
+        fvgs = [self._fvg(1.2000, 1.2030), self._fvg(1.2020, 1.2070)]
+        poi_fundo, poi_topo = calcular_poi_composta(obs, fvgs, 1.0)
+        assert poi_fundo == pytest.approx(1.2000)
+        assert poi_topo == pytest.approx(1.2070)
+
+    def test_tudo_mitigado_usa_fallback(self):
+        obs = [self._ob(1.1000, 1.1050, mitigado=True)]
+        fvgs = [self._fvg(1.1040, 1.1080, mitigado=True)]
+        poi_fundo, poi_topo = calcular_poi_composta(obs, fvgs, 1.2345)
+        assert poi_fundo == pytest.approx(1.2345)
+        assert poi_topo == pytest.approx(1.2345)
+
+    def test_listas_vazias_usa_fallback(self):
+        poi_fundo, poi_topo = calcular_poi_composta([], [], 1.5)
+        assert poi_fundo == pytest.approx(1.5)
+        assert poi_topo == pytest.approx(1.5)
+
+    def test_multiplas_intersecoes_retorna_envelope(self):
+        # Par 1: OB [1.1000-1.1030] ∩ FVG [1.1020-1.1040] = [1.1020-1.1030]
+        # Par 2: OB [1.1060-1.1090] ∩ FVG [1.1080-1.1100] = [1.1080-1.1090]
+        obs = [self._ob(1.1000, 1.1030), self._ob(1.1060, 1.1090)]
+        fvgs = [self._fvg(1.1020, 1.1040), self._fvg(1.1080, 1.1100)]
+        poi_fundo, poi_topo = calcular_poi_composta(obs, fvgs, 1.0)
+        assert poi_fundo == pytest.approx(1.1020)
+        assert poi_topo == pytest.approx(1.1090)
+
+    def test_fronteira_coincidente_nao_e_intersecao(self):
+        # OB.topo == FVG.fundo → inf == sup; estrito inf < sup falha.
+        # Deve cair para o fallback dos OBs.
+        obs = [self._ob(1.1000, 1.1050)]
+        fvgs = [self._fvg(1.1050, 1.1080)]
+        poi_fundo, poi_topo = calcular_poi_composta(obs, fvgs, 1.0)
+        assert poi_fundo == pytest.approx(1.1000)
+        assert poi_topo == pytest.approx(1.1050)
+
+    def test_ignora_obs_mitigados_em_intersecao(self):
+        # OB ativo não interseciona; OB mitigado intersecionaria, mas é ignorado.
+        # Resultado: fallback para envelope do OB ativo.
+        obs = [
+            self._ob(1.1000, 1.1020, mitigado=False),
+            self._ob(1.1040, 1.1080, mitigado=True),
+        ]
+        fvgs = [self._fvg(1.1050, 1.1090)]
+        poi_fundo, poi_topo = calcular_poi_composta(obs, fvgs, 1.0)
+        assert poi_fundo == pytest.approx(1.1000)
+        assert poi_topo == pytest.approx(1.1020)
+
+
+class TestMarcarObsV2Mitigados:
+    """OB v2 mitigation at 50% (zona_50) using wick (minima/maxima)."""
+
+    _T0 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    _T1 = datetime(2024, 1, 1, 4, tzinfo=timezone.utc)
+
+    def _ob(self, fundo: float, topo: float, direcao: str = "ALTA") -> OrderBlockV2:
+        return OrderBlockV2(
+            id="ob",
+            simbolo="EURUSD",
+            direcao=direcao,
+            preco_topo=topo,
+            preco_fundo=fundo,
+            zona_50=(topo + fundo) / 2,
+            tempo=self._T0,
+            leg_id="leg",
+        )
+
+    def _velas(self, minima: float, maxima: float) -> pd.DataFrame:
+        return pd.DataFrame([{
+            "tempo": self._T1,
+            "abertura": 1.1050,
+            "maxima": maxima,
+            "minima": minima,
+            "fechamento": 1.1050,
+            "volume": 100,
+        }])
+
+    def test_alta_wick_atinge_zona50_mitiga(self):
+        # OB ALTA [1.100-1.110], zona_50=1.105. wick min=1.103 <= 1.105 → mitigado
+        ob = self._ob(1.1000, 1.1100)
+        marcar_obs_v2_mitigados([ob], self._velas(minima=1.1030, maxima=1.1120))
+        assert ob.mitigado is True
+
+    def test_alta_wick_acima_zona50_nao_mitiga(self):
+        # min=1.106 > zona_50=1.105 → não mitigado
+        ob = self._ob(1.1000, 1.1100)
+        marcar_obs_v2_mitigados([ob], self._velas(minima=1.1060, maxima=1.1120))
+        assert ob.mitigado is False
+
+    def test_baixa_wick_atinge_zona50_mitiga(self):
+        # OB BAIXA [1.100-1.110], zona_50=1.105. maxima=1.107 >= 1.105 → mitigado
+        ob = self._ob(1.1000, 1.1100, direcao="BAIXA")
+        marcar_obs_v2_mitigados([ob], self._velas(minima=1.1040, maxima=1.1070))
+        assert ob.mitigado is True
+
+    def test_baixa_wick_abaixo_zona50_nao_mitiga(self):
+        # maxima=1.103 < zona_50=1.105 → não mitigado
+        ob = self._ob(1.1000, 1.1100, direcao="BAIXA")
+        marcar_obs_v2_mitigados([ob], self._velas(minima=1.0980, maxima=1.1030))
+        assert ob.mitigado is False
+
+    def test_vela_anterior_ao_ob_nao_mitiga(self):
+        # Vela com tempo < ob.tempo é ignorada pelo filtro
+        ob = self._ob(1.1000, 1.1100)
+        velas_antes = pd.DataFrame([{
+            "tempo": self._T0 - timedelta(hours=4),
+            "abertura": 1.1090,
+            "maxima": 1.1120,
+            "minima": 1.0900,  # bem abaixo de zona_50=1.105
+            "fechamento": 1.0950,
+            "volume": 100,
+        }])
+        marcar_obs_v2_mitigados([ob], velas_antes)
+        assert ob.mitigado is False
+
+
+# ---------------------------------------------------------------------------
+# marcar_fvgs_mitigados
+# ---------------------------------------------------------------------------
+
+class TestMarcarFvgsMitigados:
+    """
+    FVG mitigation usa close (não wick) a 50% do gap — canônico ICT.
+    Wick atingindo meio_gap mas close permanecendo do lado correto = não mitigado.
+    """
+
+    _T0 = datetime(2024, 1, 2, tzinfo=timezone.utc)
+
+    def _fvg(self, fundo: float, topo: float, direcao: str = "ALTA") -> FairValueGap:
+        return FairValueGap(
+            id="fvg-test",
+            simbolo="EURUSD",
+            direcao=direcao,
+            preco_topo=topo,
+            preco_fundo=fundo,
+            tempo=self._T0,
+        )
+
+    def _vela(self, fechamento: float, minima: float | None = None, maxima: float | None = None) -> pd.DataFrame:
+        return pd.DataFrame([{
+            "tempo": self._T0 + timedelta(hours=4),
+            "abertura": fechamento,
+            "maxima": maxima if maxima is not None else fechamento + 0.0010,
+            "minima": minima if minima is not None else fechamento - 0.0010,
+            "fechamento": fechamento,
+            "volume": 100,
+        }])
+
+    def test_alta_close_atinge_meio_gap_mitiga(self):
+        # FVG ALTA [1.1000–1.1100], meio_gap=1.1050; close=1.1050 → mitigado
+        fvg = self._fvg(1.1000, 1.1100, "ALTA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1050))
+        assert fvg.mitigado is True
+
+    def test_alta_close_abaixo_meio_gap_mitiga(self):
+        # close=1.1040 < meio_gap=1.1050 → mitigado
+        fvg = self._fvg(1.1000, 1.1100, "ALTA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1040))
+        assert fvg.mitigado is True
+
+    def test_alta_wick_atinge_mas_close_acima_nao_mitiga(self):
+        # Wick desce até 1.1040 (abaixo de meio_gap=1.1050) mas close=1.1060 → não mitigado
+        fvg = self._fvg(1.1000, 1.1100, "ALTA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1060, minima=1.1040))
+        assert fvg.mitigado is False
+
+    def test_baixa_close_atinge_meio_gap_mitiga(self):
+        # FVG BAIXA [1.1000–1.1100], meio_gap=1.1050; close=1.1050 → mitigado
+        fvg = self._fvg(1.1000, 1.1100, "BAIXA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1050))
+        assert fvg.mitigado is True
+
+    def test_baixa_close_acima_meio_gap_mitiga(self):
+        # close=1.1060 > meio_gap=1.1050 → mitigado
+        fvg = self._fvg(1.1000, 1.1100, "BAIXA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1060))
+        assert fvg.mitigado is True
+
+    def test_baixa_wick_atinge_mas_close_abaixo_nao_mitiga(self):
+        # Wick sobe até 1.1060 (acima de meio_gap=1.1050) mas close=1.1040 → não mitigado
+        fvg = self._fvg(1.1000, 1.1100, "BAIXA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1040, maxima=1.1060))
+        assert fvg.mitigado is False
+
+    def test_vela_anterior_ao_fvg_nao_mitiga(self):
+        # Vela com tempo < fvg.tempo é ignorada
+        fvg = self._fvg(1.1000, 1.1100, "ALTA")
+        vela_antes = pd.DataFrame([{
+            "tempo": self._T0 - timedelta(hours=4),
+            "abertura": 1.1040,
+            "maxima": 1.1040,
+            "minima": 1.0900,
+            "fechamento": 1.0900,  # bem abaixo de meio_gap
+            "volume": 100,
+        }])
+        marcar_fvgs_mitigados([fvg], vela_antes)
+        assert fvg.mitigado is False
+
+
+# ---------------------------------------------------------------------------
+# testado — OBs e FVGs
+# ---------------------------------------------------------------------------
+
+class TestMarcarZonasTestadas:
+    """
+    Zona testada = wick entrou na zona sem mitigar.
+    Zona virgem = testado=False após verificação.
+    """
+
+    _T0 = datetime(2024, 1, 2, tzinfo=timezone.utc)
+
+    def _ob(self, fundo: float, topo: float, direcao: str = "ALTA") -> OrderBlockV2:
+        return OrderBlockV2(
+            id="ob-test",
+            simbolo="EURUSD",
+            direcao=direcao,
+            preco_topo=topo,
+            preco_fundo=fundo,
+            zona_50=(fundo + topo) / 2,
+            tempo=self._T0,
+            leg_id="leg-x",
+        )
+
+    def _fvg(self, fundo: float, topo: float, direcao: str = "ALTA") -> FairValueGap:
+        return FairValueGap(
+            id="fvg-test",
+            simbolo="EURUSD",
+            direcao=direcao,
+            preco_topo=topo,
+            preco_fundo=fundo,
+            tempo=self._T0,
+        )
+
+    def _vela(self, fechamento: float, minima: float | None = None, maxima: float | None = None) -> pd.DataFrame:
+        return pd.DataFrame([{
+            "tempo": self._T0 + timedelta(hours=4),
+            "abertura": fechamento,
+            "maxima": maxima if maxima is not None else fechamento + 0.0005,
+            "minima": minima if minima is not None else fechamento - 0.0005,
+            "fechamento": fechamento,
+            "volume": 100,
+        }])
+
+    # --- OB ALTA ---
+
+    def test_ob_alta_wick_entra_na_zona_sem_mitigar_testado(self):
+        # OB ALTA [1.1000–1.1100], zona_50=1.1050
+        # minima=1.1060 <= preco_topo=1.1100, mas > zona_50=1.1050 → testado, não mitigado
+        ob = self._ob(1.1000, 1.1100)
+        marcar_obs_v2_mitigados([ob], self._vela(fechamento=1.1070, minima=1.1060))
+        assert ob.testado is True
+        assert ob.mitigado is False
+
+    def test_ob_alta_wick_nao_entra_virgem(self):
+        # minima=1.1110 > preco_topo=1.1100 → zona não tocada → testado=False
+        ob = self._ob(1.1000, 1.1100)
+        marcar_obs_v2_mitigados([ob], self._vela(fechamento=1.1120, minima=1.1110))
+        assert ob.testado is False
+        assert ob.mitigado is False
+
+    def test_ob_alta_mitigado_nao_marca_testado(self):
+        # minima=1.1040 <= zona_50=1.1050 → mitigado antes de checar testado
+        ob = self._ob(1.1000, 1.1100)
+        marcar_obs_v2_mitigados([ob], self._vela(fechamento=1.1060, minima=1.1040))
+        assert ob.mitigado is True
+
+    # --- OB BAIXA ---
+
+    def test_ob_baixa_wick_entra_na_zona_sem_mitigar_testado(self):
+        # OB BAIXA [1.1000–1.1100], zona_50=1.1050
+        # maxima=1.1040 >= preco_fundo=1.1000, mas < zona_50=1.1050 → testado, não mitigado
+        ob = self._ob(1.1000, 1.1100, direcao="BAIXA")
+        marcar_obs_v2_mitigados([ob], self._vela(fechamento=1.1030, maxima=1.1040))
+        assert ob.testado is True
+        assert ob.mitigado is False
+
+    # --- FVG ALTA ---
+
+    def test_fvg_alta_wick_entra_no_gap_sem_mitigar_testado(self):
+        # FVG ALTA [1.1000–1.1100], meio_gap=1.1050
+        # minima=1.1080 < preco_topo=1.1100, close=1.1085 > meio_gap → testado, não mitigado
+        fvg = self._fvg(1.1000, 1.1100, "ALTA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1085, minima=1.1080))
+        assert fvg.testado is True
+        assert fvg.mitigado is False
+
+    def test_fvg_alta_wick_nao_entra_virgem(self):
+        # minima=1.1110 > preco_topo=1.1100 → não entrou → testado=False
+        fvg = self._fvg(1.1000, 1.1100, "ALTA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1120, minima=1.1110))
+        assert fvg.testado is False
+        assert fvg.mitigado is False
+
+    # --- FVG BAIXA ---
+
+    def test_fvg_baixa_wick_entra_no_gap_sem_mitigar_testado(self):
+        # FVG BAIXA [1.1000–1.1100], meio_gap=1.1050
+        # maxima=1.1020 > preco_fundo=1.1000, close=1.1015 < meio_gap → testado, não mitigado
+        fvg = self._fvg(1.1000, 1.1100, "BAIXA")
+        marcar_fvgs_mitigados([fvg], self._vela(fechamento=1.1015, maxima=1.1020))
+        assert fvg.testado is True
+        assert fvg.mitigado is False

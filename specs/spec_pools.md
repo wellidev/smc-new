@@ -44,7 +44,9 @@ cluster = [minima[j] for j in range(i+1, min(i+15, len))
 - EQH varredido: `close > preco + tolerancia/2`
 - EQL varredido: `close < preco - tolerancia/2`
 
-**ID:** `SHA1(simbolo|tipo|str(round(preco, 5))|tempo.isoformat())[:16]`
+**ID:** `SHA1(simbolo|tipo|str(round(preco, 5)))[:16]`
+
+**Nota:** `tempo` foi removido do hash para garantir estabilidade entre ciclos — o mesmo nível de preço deve sempre produzir o mesmo `pool_id`, independente de quando o swing foi detectado (ver bug `pool_id instável` na memória do projeto).
 
 ---
 

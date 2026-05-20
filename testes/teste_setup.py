@@ -90,33 +90,44 @@ def _pool(tipo="EQH"):
 class TestDetectarMssNoPoi:
     def _df_mss_bullish(self) -> pd.DataFrame:
         """
-        Creates a bullish MSS scenario:
-        - Candles inside POI (poi_fundo=1.1000, poi_topo=1.1060)
-        - Bearish candle (retrace) followed by bullish candle closing above bearish open
+        Bullish MSS canônico (9 candles, todos dentro da POI [1.1000, 1.1060]):
+          - c2: micro-swing LOW  (minima=1.1010)
+          - c4: micro-swing HIGH (maxima=1.1055)
+          - c7: confirmação      (close=1.1058 > swing HIGH 1.1055)
         """
-        ts = _ts(10)
-        poi_fundo, poi_topo = 1.1000, 1.1060
-        linhas = [_vela(ts[i], 1.1030, 1.1050, 1.1020, 1.1030) for i in range(10)]
-
-        # Bearish candle at idx 3 (inside POI)
-        linhas[3] = _vela(ts[3], 1.1040, 1.1055, 1.1020, 1.1025)  # bearish
-
-        # Bullish MSS at idx 4: closes above v3.abertura=1.1040
-        linhas[4] = _vela(ts[4], 1.1025, 1.1060, 1.1020, 1.1045)  # close > 1.1040
-
+        ts = _ts(9)
+        linhas = [
+            _vela(ts[0], 1.1040, 1.1050, 1.1035, 1.1040),
+            _vela(ts[1], 1.1040, 1.1050, 1.1035, 1.1040),
+            _vela(ts[2], 1.1035, 1.1045, 1.1010, 1.1015),  # swing LOW
+            _vela(ts[3], 1.1020, 1.1035, 1.1015, 1.1030),
+            _vela(ts[4], 1.1030, 1.1055, 1.1025, 1.1050),  # swing HIGH
+            _vela(ts[5], 1.1045, 1.1050, 1.1040, 1.1045),
+            _vela(ts[6], 1.1045, 1.1050, 1.1040, 1.1045),
+            _vela(ts[7], 1.1050, 1.1060, 1.1048, 1.1058),  # confirmação MSS
+            _vela(ts[8], 1.1055, 1.1060, 1.1050, 1.1055),  # vela ainda aberta
+        ]
         return _df(linhas)
 
     def _df_mss_bearish(self) -> pd.DataFrame:
-        ts = _ts(10)
-        poi_fundo, poi_topo = 1.1000, 1.1060
-        linhas = [_vela(ts[i], 1.1030, 1.1050, 1.1020, 1.1030) for i in range(10)]
-
-        # Bullish candle at idx 3
-        linhas[3] = _vela(ts[3], 1.1020, 1.1055, 1.1015, 1.1040)  # bullish
-
-        # Bearish MSS at idx 4: closes below v3.abertura=1.1020
-        linhas[4] = _vela(ts[4], 1.1040, 1.1045, 1.1000, 1.1010)  # close < 1.1020
-
+        """
+        Bearish MSS canônico (9 candles, todos dentro da POI [1.1000, 1.1060]):
+          - c2: micro-swing HIGH (maxima=1.1055)
+          - c4: micro-swing LOW  (minima=1.1005)
+          - c7: confirmação      (close=1.0998 < swing LOW 1.1005)
+        """
+        ts = _ts(9)
+        linhas = [
+            _vela(ts[0], 1.1040, 1.1050, 1.1035, 1.1040),
+            _vela(ts[1], 1.1040, 1.1050, 1.1035, 1.1040),
+            _vela(ts[2], 1.1045, 1.1055, 1.1040, 1.1050),  # swing HIGH
+            _vela(ts[3], 1.1045, 1.1050, 1.1038, 1.1040),
+            _vela(ts[4], 1.1035, 1.1040, 1.1005, 1.1010),  # swing LOW
+            _vela(ts[5], 1.1015, 1.1025, 1.1010, 1.1020),
+            _vela(ts[6], 1.1020, 1.1030, 1.1015, 1.1025),
+            _vela(ts[7], 1.1020, 1.1025, 1.0995, 1.0998),  # confirmação MSS
+            _vela(ts[8], 1.1000, 1.1005, 1.0995, 1.1000),  # vela ainda aberta
+        ]
         return _df(linhas)
 
     def test_mss_bullish_detectado(self):
@@ -164,7 +175,7 @@ class TestCalcularScoreSetup:
         leg = _leg("ALTA", eh_displacement=True)
         pool = _pool("EQH")
         score = calcular_score_setup(
-            ev, leg, pool, None, 0.001,
+            ev, leg, pool,
             tem_overlap_ob_fvg=True,
             em_sessao=True,
             zona_ok=True,
@@ -172,18 +183,18 @@ class TestCalcularScoreSetup:
         )
         assert score >= 70
 
-    def test_score_minimo_sem_nada(self):
+    def test_score_minimo_bos_pdh(self):
         ev = _evento("BOS", "ALTA")
         pool = _pool("PDH")
-        score = calcular_score_setup(ev, None, pool, None, 0.001)
-        assert score == 0
+        score = calcular_score_setup(ev, None, pool)
+        assert score == 15  # BOS(0) + PDH(+15), sem outros critérios
 
     def test_choch_adiciona_20(self):
         ev_choch = _evento("ChoCH", "ALTA")
         ev_bos = _evento("BOS", "ALTA")
         pool = _pool("PDH")
-        s1 = calcular_score_setup(ev_choch, None, pool, None, 0.001)
-        s2 = calcular_score_setup(ev_bos, None, pool, None, 0.001)
+        s1 = calcular_score_setup(ev_choch, None, pool)
+        s2 = calcular_score_setup(ev_bos, None, pool)
         assert s1 - s2 == 20
 
     def test_displacement_adiciona_15(self):
@@ -191,17 +202,41 @@ class TestCalcularScoreSetup:
         pool = _pool("PDH")
         leg_disp = _leg("ALTA", eh_displacement=True)
         leg_norm = _leg("ALTA", eh_displacement=False)
-        s1 = calcular_score_setup(ev, leg_disp, pool, None, 0.001)
-        s2 = calcular_score_setup(ev, leg_norm, pool, None, 0.001)
+        s1 = calcular_score_setup(ev, leg_disp, pool)
+        s2 = calcular_score_setup(ev, leg_norm, pool)
         assert s1 - s2 == 15
 
-    def test_eqh_adiciona_10_vs_pdh(self):
+    def test_pdh_adiciona_15_eqh_adiciona_10(self):
         ev = _evento("BOS", "ALTA")
         pool_eqh = _pool("EQH")
         pool_pdh = _pool("PDH")
-        s1 = calcular_score_setup(ev, None, pool_eqh, None, 0.001)
-        s2 = calcular_score_setup(ev, None, pool_pdh, None, 0.001)
-        assert s1 - s2 == 10
+        s_eqh = calcular_score_setup(ev, None, pool_eqh)
+        s_pdh = calcular_score_setup(ev, None, pool_pdh)
+        assert s_eqh == 10
+        assert s_pdh == 15
+        assert s_pdh - s_eqh == 5  # PDH institucional pondera mais
+
+    def test_zona_virgem_adiciona_5(self):
+        ev = _evento("BOS", "ALTA")
+        pool = _pool("PDH")
+        s_virgem = calcular_score_setup(ev, None, pool, zona_virgem=True)
+        s_testada = calcular_score_setup(ev, None, pool, zona_virgem=False)
+        assert s_virgem - s_testada == 5
+
+    def test_score_maximo_absoluto_100(self):
+        # Todas as condições verdadeiras + PDH + virgem → máximo = 100
+        ev = _evento("ChoCH", "ALTA")
+        leg = _leg("ALTA", eh_displacement=True)
+        pool = _pool("PDH")
+        score = calcular_score_setup(
+            ev, leg, pool,
+            tem_overlap_ob_fvg=True,
+            em_sessao=True,
+            zona_ok=True,
+            bias_alinhado=True,
+            zona_virgem=True,
+        )
+        assert score == 100
 
 
 # ---------------------------------------------------------------------------
@@ -210,13 +245,17 @@ class TestCalcularScoreSetup:
 
 class TestCalcularRiscoRrV2:
     def test_alta_sl_abaixo_entrada(self):
-        sl, tp, rr = _calcular_risco_rr_v2(1.1100, 1.1000, 1.1060, "ALTA")
+        result = _calcular_risco_rr_v2(1.1100, 1.1000, 1.1060, "ALTA")
+        assert result is not None
+        sl, tp, rr = result
         assert sl == pytest.approx(1.1000)
         assert tp == pytest.approx(1.1100 + 2 * (1.1100 - 1.1000))
         assert rr == pytest.approx(2.0)
 
     def test_baixa_sl_acima_entrada(self):
-        sl, tp, rr = _calcular_risco_rr_v2(1.1050, 1.1000, 1.1100, "BAIXA")
+        result = _calcular_risco_rr_v2(1.1050, 1.1000, 1.1100, "BAIXA")
+        assert result is not None
+        sl, tp, rr = result
         assert sl == pytest.approx(1.1100)
         assert tp == pytest.approx(1.1050 - 2 * (1.1100 - 1.1050))
         assert rr == pytest.approx(2.0)
@@ -226,5 +265,39 @@ class TestCalcularRiscoRrV2:
             ("ALTA", 1.1050, 1.1000, 1.1060),
             ("BAIXA", 1.1030, 1.1000, 1.1060),
         ]:
-            _, _, rr = _calcular_risco_rr_v2(entrada, f, t, direcao)
+            result = _calcular_risco_rr_v2(entrada, f, t, direcao)
+            assert result is not None
+            _, _, rr = result
             assert rr == pytest.approx(2.0)
+
+    def test_risco_nulo_retorna_none(self):
+        # ALTA: preco_entrada <= poi_fundo → risco <= 0
+        result = _calcular_risco_rr_v2(1.1000, 1.1000, 1.1060, "ALTA")
+        assert result is None
+
+    def test_risco_negativo_retorna_none(self):
+        # BAIXA: preco_entrada >= poi_topo → risco <= 0
+        result = _calcular_risco_rr_v2(1.1100, 1.1000, 1.1100, "BAIXA")
+        assert result is None
+
+    def test_alta_sl_com_buffer_atr(self):
+        # atr=0.0010 → buffer=0.0001 → sl = poi_fundo - 0.0001
+        atr = 0.0010
+        result = _calcular_risco_rr_v2(1.1100, 1.1000, 1.1060, "ALTA", atr=atr)
+        assert result is not None
+        sl, tp, rr = result
+        assert sl == pytest.approx(1.1000 - 0.1 * atr)
+        risco = 1.1100 - sl
+        assert tp == pytest.approx(1.1100 + 2.0 * risco)
+        assert rr == pytest.approx(2.0)
+
+    def test_baixa_sl_com_buffer_atr(self):
+        # atr=0.0010 → buffer=0.0001 → sl = poi_topo + 0.0001
+        atr = 0.0010
+        result = _calcular_risco_rr_v2(1.1050, 1.1000, 1.1100, "BAIXA", atr=atr)
+        assert result is not None
+        sl, tp, rr = result
+        assert sl == pytest.approx(1.1100 + 0.1 * atr)
+        risco = sl - 1.1050
+        assert tp == pytest.approx(1.1050 - 2.0 * risco)
+        assert rr == pytest.approx(2.0)

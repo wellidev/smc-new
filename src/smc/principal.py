@@ -8,9 +8,11 @@ from typing import Any
 import pandas as pd
 
 from smc.analisador_smc import (
+    _calcular_risco_rr_v2,
     calcular_atr,
     calcular_poi_composta,
     calcular_score_setup,
+    detectar_captura_liquidez,
     detectar_eventos_estrutura,
     detectar_mss_no_poi,
     detectar_obs_corpo,
@@ -18,8 +20,9 @@ from smc.analisador_smc import (
     detectar_eqh_eql,
     extrair_fvgs_no_intervalo,
     extrair_legs,
-    _marcar_obs_v2_mitigados,
-    _marcar_fvgs_mitigados,
+    marcar_obs_v2_mitigados,
+    marcar_fvgs_mitigados,
+    pool_varrido_por_sweep,
 )
 from smc.configuracoes import (
     ATR_PERIODO,
@@ -28,7 +31,9 @@ from smc.configuracoes import (
     EXIGIR_CONFIRMACAO_LTF,
     IDADE_MAX_SETUP_HORAS,
     INTERVALO_VARREDURA_SEGUNDOS,
+    LIMIAR_PAVIO,
     PERIODO_SWING,
+    PERIODO_SWING_ESTRUTURA,
     PERIODO_SWING_D1,
     SCORE_MINIMO_SETUP,
     TELEGRAM_CHAT_ID,
@@ -86,7 +91,7 @@ def _obter_dados_mercado(
 
     velas_m5 = provedor.obter_velas(simbolo, TIMEFRAME_GATILHO, 50)
     if velas_m5 is None or len(velas_m5) == 0:
-        logger.warning("Dados insuficientes para %s no M15.", simbolo)
+        logger.warning("Dados insuficientes para %s no M5.", simbolo)
         return None
 
     velas_d1 = provedor.obter_velas(simbolo, TIMEFRAME_D1, VELAS_D1_HISTORICO)
@@ -108,7 +113,7 @@ def _processar_simbolo(
     velas_h4, velas_m5, velas_d1 = dados
     preco_atual = float(velas_m5.iloc[-1]["fechamento"])
     _detectar_e_registrar_setups(simbolo, velas_h4, velas_m5, velas_d1, repo)
-    _verificar_confirmacoes(simbolo, velas_m5, velas_d1, preco_atual, repo, notificador)
+    _verificar_confirmacoes(simbolo, velas_h4, velas_m5, velas_d1, preco_atual, repo, notificador)
 
 
 MENSAGEM_SETUP = (
@@ -134,11 +139,11 @@ def _detectar_e_registrar_setups(
     if atr <= 0:
         return
 
-    eventos = detectar_eventos_estrutura(velas_h4, simbolo, PERIODO_SWING)
+    eventos = detectar_eventos_estrutura(velas_h4, simbolo, PERIODO_SWING_ESTRUTURA)
     if not eventos:
         return
 
-    legs = extrair_legs(velas_h4, eventos, simbolo, PERIODO_SWING, atr)
+    legs = extrair_legs(velas_h4, eventos, simbolo, PERIODO_SWING_ESTRUTURA, atr)
     leg_por_evento: dict[datetime, Any] = {leg.tempo_fim: leg for leg in legs}
 
     pools = detectar_eqh_eql(velas_h4, simbolo, atr)
@@ -149,28 +154,30 @@ def _detectar_e_registrar_setups(
         return
 
     preco_atual = float(velas_m5.iloc[-1]["fechamento"])
+    capturas = detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO, simbolo)
 
     for pool in pools:
-        varrido = (
-            (pool.tipo in ("EQH", "PDH") and preco_atual > pool.preco - pool.tolerancia)
-            or (pool.tipo in ("EQL", "PDL") and preco_atual < pool.preco + pool.tolerancia)
-        )
-        if not varrido:
+        captura = pool_varrido_por_sweep(pool, capturas)
+        if captura is None:
             continue
 
-        eventos_pos = [e for e in eventos if e.tempo > pool.tempo]
+        direcao_reversal = "BAIXA" if pool.tipo in ("EQH", "PDH") else "ALTA"
+        eventos_pos = [
+            e for e in eventos
+            if e.tempo > captura.tempo and e.direcao == direcao_reversal
+        ]
         if not eventos_pos:
             continue
 
-        evento = eventos_pos[0]
+        evento = eventos_pos[-1]
         leg = leg_por_evento.get(evento.tempo)
 
         velas_fechadas = velas_h4.iloc[:-1]
         if leg is not None:
             obs_leg = detectar_obs_corpo(velas_h4, leg, simbolo)
             fvgs_leg = extrair_fvgs_no_intervalo(velas_h4, leg.indice_inicio, leg.indice_fim, simbolo)
-            _marcar_obs_v2_mitigados(obs_leg, velas_fechadas)
-            _marcar_fvgs_mitigados(fvgs_leg, velas_fechadas)
+            marcar_obs_v2_mitigados(obs_leg, velas_fechadas)
+            marcar_fvgs_mitigados(fvgs_leg, velas_fechadas)
             obs_val = [o for o in obs_leg if not o.mitigado and o.direcao == evento.direcao]
             fvgs_val = [f for f in fvgs_leg if not f.mitigado and f.direcao == evento.direcao]
             poi_fundo, poi_topo = calcular_poi_composta(obs_val, fvgs_val, evento.nivel_rompido)
@@ -190,16 +197,19 @@ def _detectar_e_registrar_setups(
             if velas_d1 is not None else False
         )
 
+        zona_virgem = (
+            not any(o.testado for o in obs_val)
+            and not any(f.testado for f in fvgs_val)
+        ) if leg is not None else False
         score = calcular_score_setup(
             evento=evento,
             leg=leg,
             pool=pool,
-            velas_d1=velas_d1,
-            atr=atr,
             tem_overlap_ob_fvg=tem_overlap,
             em_sessao=em_sessao,
             zona_ok=zona_ok,
             bias_alinhado=bias_alinhado,
+            zona_virgem=zona_virgem,
         )
 
         if score < SCORE_MINIMO_SETUP:
@@ -239,12 +249,14 @@ def _detectar_e_registrar_setups(
 
 def _verificar_confirmacoes(
         simbolo: str,
+        velas_h4: pd.DataFrame,
         velas_m5: pd.DataFrame,
         velas_d1: pd.DataFrame | None,
         preco_atual: float,
         repo: Repositorio,
         notificador: Notificador,
 ) -> None:
+    atr = calcular_atr(velas_h4, ATR_PERIODO)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_SETUP_HORAS)
     setups = repo.carregar_setups_ativos(simbolo, cutoff)
 
@@ -253,16 +265,23 @@ def _verificar_confirmacoes(
          evento_nivel, leg_id, poi_fundo, poi_topo, score) = row
 
         if EXIGIR_CONFIRMACAO_LTF:
-            confirmacao = detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo)
+            evento_tempo = datetime.fromisoformat(evento_tempo_str)
+            confirmacao = detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo,
+                                              cutoff=evento_tempo, atr=atr)
             if confirmacao is None:
                 continue
+            confirmacao.setup_id = setup_id
+            confirmacao.id = gerar_id_confirmacao(simbolo, setup_id, confirmacao.tempo)
         else:
             if not (poi_fundo <= preco_atual <= poi_topo):
                 continue
-            from smc.modelos import gerar_id_confirmacao as _gid
-            sl, tp, rr = _calcular_risco_rr_direto(preco_atual, poi_fundo, poi_topo, direcao)
+            rr_result = _calcular_risco_rr_v2(preco_atual, poi_fundo, poi_topo, direcao, atr)
+            if rr_result is None:
+                logger.debug("Setup %s ignorado: risco nulo (poi degenerado)", simbolo)
+                continue
+            sl, tp, rr = rr_result
             confirmacao = ConfirmacaoEntrada(
-                id=_gid(simbolo, setup_id, datetime.now(timezone.utc)),
+                id=gerar_id_confirmacao(simbolo, setup_id, datetime.now(timezone.utc)),
                 setup_id=setup_id,
                 simbolo=simbolo,
                 tipo_confirmacao="DIRETO",
@@ -329,41 +348,14 @@ def _verificar_confirmacoes(
             tp=confirmacao.tp,
             rr=confirmacao.rr,
         )
-
-        class _FakeZona:
-            def __init__(self, id_: str, t: float, f: float):
-                self.id = id_
-                self.preco_topo = t
-                self.preco_fundo = f
-
-        repo.persistir_sinal(
-            id_sinal,
-            simbolo,
-            _FakeZona(setup_id, poi_topo, poi_fundo),
-            _FakeZona(setup_id + "_fvg", poi_topo, poi_fundo),
-            direcao,
-        )
-
-        repo.desativar_setup(setup_id)
-        logger.info("Sinal v2 disparado: %s %s score=%d", simbolo, direcao, score)
+        repo.registrar_sinal_v2(id_sinal, setup_id, simbolo, direcao, poi_fundo, poi_topo)
 
         enviado = notificador.enviar_alerta(mensagem)
-        if not enviado:
-            logger.error("Falha ao enviar alerta v2 para %s.", simbolo)
-
-
-def _calcular_risco_rr_direto(
-        preco: float, poi_fundo: float, poi_topo: float, direcao: str
-) -> tuple[float, float, float]:
-    if direcao == "ALTA":
-        sl = poi_fundo
-        risco = preco - sl
-        tp = preco + 2.0 * risco if risco > 0 else preco
-    else:
-        sl = poi_topo
-        risco = sl - preco
-        tp = preco - 2.0 * risco if risco > 0 else preco
-    return sl, tp, 2.0
+        if enviado:
+            repo.desativar_setup(setup_id)
+            logger.info("Sinal v2 disparado: %s %s score=%d", simbolo, direcao, score)
+        else:
+            logger.error("Falha ao enviar alerta v2 para %s — setup mantido ativo para retry.", simbolo)
 
 
 def _conectar_mt5_com_retry(provedor: ProvedorDados, tentativas: int = 3) -> bool:
@@ -388,14 +380,22 @@ def main() -> None:
 
     logger.info("Sistema SMC iniciado. Monitorando %d ativos.", len(ATIVOS_MONITORADOS))
 
+    _ciclo = 0
     try:
         while True:
+            _ciclo += 1
             logger.info("--- Início do ciclo de varredura ---")
             for simbolo in ATIVOS_MONITORADOS:
                 try:
                     _processar_simbolo(simbolo, provedor, notificador, repo)
                 except Exception:
                     logger.exception("Erro não tratado ao processar %s.", simbolo)
+
+            if _ciclo % 60 == 0:
+                cutoff_housekeeping = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_SETUP_HORAS * 2)
+                removidos = repo.limpar_setups_antigos(cutoff_housekeeping)
+                if removidos:
+                    logger.info("Housekeeping: %d setups antigos removidos.", removidos)
 
             logger.info("--- Ciclo concluído. Aguardando %ds ---", INTERVALO_VARREDURA_SEGUNDOS)
             time.sleep(INTERVALO_VARREDURA_SEGUNDOS)

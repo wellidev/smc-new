@@ -44,6 +44,7 @@ class ProvedorDados:
         self._repo = repo
         self._mt5_conectado = False
         self._offset_servidor: int = 0
+        self._chamadas_desde_offset: int = 0
 
     def conectar(self) -> bool:
         try:
@@ -83,6 +84,13 @@ class ProvedorDados:
             logger.warning("MT5 não conectado. Chame conectar() primeiro.")
             return None
 
+        self._chamadas_desde_offset += 1
+        if self._chamadas_desde_offset >= 120:
+            import MetaTrader5 as _mt5_dst
+            self._offset_servidor = _detectar_offset_servidor(_mt5_dst)
+            self._chamadas_desde_offset = 0
+            logger.debug("Offset do servidor MT5 recalculado: %dh", self._offset_servidor)
+
         try:
             import MetaTrader5 as mt5
 
@@ -90,7 +98,7 @@ class ProvedorDados:
 
             if ultimo_tempo is None:
                 registros = mt5.copy_rates_from_pos(simbolo, timeframe, 0, quantidade)
-                if registros is None or len(registros) == 0:
+                if registros is None or len(registros) < 2:
                     logger.warning("Nenhuma vela retornada para %s TF=%d", simbolo, timeframe)
                     return None
                 self._repo.persistir_velas(
@@ -103,7 +111,7 @@ class ProvedorDados:
                 duracao_vela = _SEGUNDOS_POR_TIMEFRAME.get(timeframe, 900)
                 n_velas = min(int(segundos_passados / duracao_vela) + 2, quantidade)
                 registros = mt5.copy_rates_from_pos(simbolo, timeframe, 0, n_velas)
-                if registros is not None and len(registros) >= 1:
+                if registros is not None and len(registros) >= 2:
                     self._repo.persistir_velas(
                         simbolo, timeframe,
                         _converter_registros(simbolo, timeframe, registros, self._offset_servidor),
@@ -120,7 +128,7 @@ class ProvedorDados:
 def _converter_registros(simbolo: str, timeframe: int, registros, offset: int = 0) -> list[tuple]:
     linhas = []
     offset_broker = offset * 3600
-    for r in registros:
+    for r in registros[:-1]:
         tempo_utc = datetime.fromtimestamp(r["time"] - offset_broker, tz=timezone.utc).isoformat()
         volume = int(r["real_volume"] or r["tick_volume"])
         linhas.append((simbolo, timeframe, tempo_utc, float(r["open"]), float(r["high"]),

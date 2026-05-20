@@ -71,7 +71,9 @@ def calcular_bias_d1_v2(velas_d1: pd.DataFrame, simbolo: str, periodo_swing: int
     eventos = detectar_eventos_estrutura(velas_d1, simbolo, periodo_swing)
     if not eventos:
         return None
-    return eventos[-1].direcao
+    ultimo = eventos[-1]
+    # ChoCH = reversão potencial; bias só confirmado após BOS subsequente na mesma direção
+    return ultimo.direcao if ultimo.tipo == "BOS" else None
 
 
 def verificar_zona_premium_discount_v2(

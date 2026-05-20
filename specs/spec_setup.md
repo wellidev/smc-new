@@ -36,10 +36,22 @@ pools = detectar_eqh_eql(velas_h4, simbolo, atr)
 eventos = detectar_eventos_estrutura(velas_h4, simbolo, PERIODO_SWING)
 legs    = extrair_legs(velas_h4, eventos, simbolo, PERIODO_SWING, atr)
 
+# Detectar capturas reais de liquidez (sweeps canônicos) ANTES do loop de pools:
+# wick rompe swing high/low + close do lado oposto + pavio ≥ LIMIAR_PAVIO (0.30).
+capturas = detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO, simbolo)
+
 para cada pool em pools:
-    se pool foi varrido (preco_atual_m5 cruzou pool.preco):
-        # Procurar evento estrutural APÓS a varredura do pool
-        eventos_pos = [e for e in eventos if e.tempo > pool.tempo]
+    captura = pool_varrido_por_sweep(pool, capturas)
+    se captura is None: continue
+        # pool_varrido_por_sweep(pool, capturas) -> CapturaLiquidez | None
+        # EQH/PDH (liquidez acima): exige captura BAIXA com preco_varredura
+        #   dentro de ±pool.tolerancia.
+        # EQL/PDL (liquidez abaixo): exige captura ALTA com preco_varredura
+        #   dentro de ±pool.tolerancia.
+        # Retorna a CapturaLiquidez que varrreu o pool, ou None.
+        # Procurar evento estrutural APÓS O SWEEP (captura.tempo), não
+        # após a criação do pool (pool.tempo) — causalidade temporal correta.
+        eventos_pos = [e for e in eventos if e.tempo > captura.tempo]
         se não há eventos_pos: continue
 
         evento = primeiro evento_pos
@@ -103,28 +115,42 @@ para cada setup em setups_ativos:
 
 ---
 
-## `detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo) -> ConfirmacaoEntrada | None`
+## `detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo, cutoff=None) -> ConfirmacaoEntrada | None`
 
-MSS (Market Structure Shift) no M5 dentro da POI — ChoCH de LTF confirmando rejeição.
+MSS (Market Structure Shift) canônico no M5 dentro da POI — ChoCH de LTF
+confirmando rejeição da zona. Equivalente a um *Change of Character* clássico:
+o preço forma micro-estrutura interna e a primeira vela que fecha além do
+último pivô define o shift.
 
 **Algoritmo:**
 ```
-1. Filtrar velas_m5 que têm mínima/máxima dentro da POI (tocam a zona)
-2. Para direcao="ALTA" (setup de alta):
-   — Dentro da POI, encontrar sequência: vela bearish (retrace) seguida por fechamento
-     acima da máxima da vela bearish anterior → "CHoCH bullish no M5"
-   — preco_confirmacao = fechamento da vela que confirmou o MSS
-3. Para direcao="BAIXA" (setup de baixa):
-   — Sequência: vela bullish seguida por fechamento abaixo da mínima → "CHoCH bearish no M5"
-4. Se encontrado:
-   — sl, tp, rr = calcular_risco_rr(preco_confirmacao, poi_fundo, poi_topo, direcao)
-   — return ConfirmacaoEntrada(tipo_confirmacao="MSS", ...)
-5. Se não encontrado: return None
+1. (Opcional) Se cutoff for fornecido, descartar velas com tempo <= cutoff.
+2. Filtrar velas_m5 cujo intervalo [minima, maxima] cruza a POI
+   (maxima >= poi_fundo AND minima <= poi_topo) → velas_poi.
+3. Se len(velas_poi) < 5: return None  (mínimo para calcular_swings com periodo=2).
+4. swings_high, swings_low = calcular_swings(velas_poi, periodo=2).
+5. Para direcao="ALTA" (setup de compra):
+   a. Para cada sl_idx em sorted(swings_low):
+      - Selecionar o PRIMEIRO swing HIGH com idx > sl_idx → (sh_idx, sh_price).
+        Se não houver, próximo sl_idx.
+      - Para j em (sh_idx + 1, len(velas_poi) - 1]:
+          se velas_poi.iloc[j].fechamento > sh_price:
+              preco = fechamento; tempo = vela j
+              retornar ConfirmacaoEntrada(tipo="MSS", ...)
+6. Para direcao="BAIXA" (setup de venda): simétrico — swing HIGH primeiro,
+   depois swing LOW posterior, depois fechamento abaixo do swing LOW.
+7. RR/SL/TP via _calcular_risco_rr_v2(preco, poi_fundo, poi_topo, direcao);
+   se retornar None (risco <= 0), pular essa candidata.
+8. Se nada encontrado: return None.
 ```
+
+**Requisitos mínimos:** 5 candles dentro da POI (necessário para que
+`calcular_swings(..., periodo=2)` consiga identificar pelo menos um par
+swing_low → swing_high → vela de confirmação).
 
 ---
 
-## `calcular_score_setup(evento, leg, pool, velas_d1, atr) -> int`
+## `calcular_score_setup(evento, leg, pool, tem_overlap_ob_fvg, em_sessao, zona_ok, bias_alinhado) -> int`
 
 Score composicional 0–100:
 
@@ -133,31 +159,37 @@ Score composicional 0–100:
 | `evento.tipo == "ChoCH"` (vs BOS) | +20 |
 | D1 alinhado com a direção | +15 |
 | `leg is not None and leg.eh_displacement` | +15 |
-| Pool do tipo "EQH" ou "EQL" (vs PDH/PDL) | +10 |
+| Pool do tipo "PDH" ou "PDL" (D1 institucional) | +15 |
+| Pool do tipo "EQH" ou "EQL" (intraday) | +10 |
 | OB∩FVG sobreposição existe na POI | +10 |
 | Sessão London/NY no momento do evento | +10 |
 | Zona premium/discount (D1 range) alinhada | +10 |
-| Total máximo | 90 |
+| Zona virgem: nenhum OB/FVG da POI foi testado antes | +5 |
+| Total máximo | 100 |
 
 `SCORE_MINIMO_SETUP = 40` em `configuracoes.py` — setups abaixo disso são descartados silenciosamente.
 
 ---
 
-## `calcular_risco_rr(preco_entrada, poi_fundo, poi_topo, direcao) -> tuple[float, float, float]`
+## `_calcular_risco_rr_v2(preco_entrada, poi_fundo, poi_topo, direcao, atr=0.0) -> tuple[float, float, float] | None`
 
 ```python
+buffer = 0.1 * atr   # buffer anti-ruído abaixo/acima da POI
 se direcao == "ALTA":
-    sl = poi_fundo        # abaixo da zona de demanda
+    sl = poi_fundo - buffer   # abaixo da zona de demanda + margem ATR
     risco = preco_entrada - sl
     tp = preco_entrada + 2 * risco
 else:
-    sl = poi_topo         # acima da zona de oferta
+    sl = poi_topo + buffer    # acima da zona de oferta + margem ATR
     risco = sl - preco_entrada
     tp = preco_entrada - 2 * risco
 
-rr = 2.0
-return sl, tp, rr
+se risco <= 0: return None
+return sl, tp, 2.0
 ```
+
+`atr` é opcional (padrão 0.0 → sem buffer). Quando fornecido (H4 ATR de Wilder), o buffer
+`0.1×ATR` evita stops levados por ruído logo abaixo/acima da zona POI.
 
 ---
 

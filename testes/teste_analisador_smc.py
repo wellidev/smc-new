@@ -4,14 +4,11 @@ import pandas as pd
 
 from smc.analisador_smc import (
     CapturaLiquidez,
-    FairValueGap,
-    OrderBlock,
     calcular_swings,
-    _marcar_fvgs_testados,
-    _marcar_obs_testados,
     detectar_captura_liquidez,
-    mapear_zonas_interesse,
+    pool_varrido_por_sweep,
 )
+from smc.modelos import PoolLiquidez
 
 
 # --- helpers ---
@@ -101,185 +98,6 @@ class TestCapturaLiquidez:
 
 
 # ---------------------------------------------------------------------------
-# Order Blocks
-# ---------------------------------------------------------------------------
-
-class TestOrderBlocks:
-    """
-    OB bullish: última vela bearish antes de impulso bullish de 3 velas.
-    Fixture: len=9, OB em índice 3, impulso em 4-6, vela[7] de teste/mitigação,
-    vela[8] é a "vela aberta" excluída automaticamente pelo Fix 1.
-    Velas padrão ficam ACIMA da zona do OB para não disparar mitigação acidental.
-    """
-
-    def _velas_ob_bullish(self, com_mitigacao: bool = False) -> pd.DataFrame:
-        ts = _ts(9)
-        # Padrão: preços acima da zona do OB (close=1.1250) para não acionar mitigação
-        velas = [_montar_vela(ts[i], 1.1200, 1.1300, 1.1150, 1.1250) for i in range(9)]
-
-        # OB bullish: vela bearish, zona [1.0980, 1.1060]
-        velas[3] = _montar_vela(ts[3], 1.1020, 1.1060, 1.0980, 1.0990)
-
-        # Impulso bullish com closes acima do topo do OB (1.1060)
-        velas[4] = _montar_vela(ts[4], 1.0990, 1.1120, 1.0985, 1.1100)
-        velas[5] = _montar_vela(ts[5], 1.1100, 1.1180, 1.1090, 1.1170)
-        velas[6] = _montar_vela(ts[6], 1.1170, 1.1230, 1.1160, 1.1220)
-
-        if com_mitigacao:
-            # Close ABAIXO do preco_fundo (1.0980) → zona perfurada completamente
-            velas[7] = _montar_vela(ts[7], 1.1020, 1.1055, 1.0960, 1.0960)
-        # velas[8] é a "vela aberta" excluída da marcação pelo mapear_zonas_interesse
-
-        return _df(velas)
-
-    def test_ob_bullish_detectado(self):
-        df = self._velas_ob_bullish()
-        obs, _ = mapear_zonas_interesse(df, "EURUSD")
-        bullish = [ob for ob in obs if ob.direcao == "ALTA"]
-        assert len(bullish) >= 1
-
-    def test_ob_mitigado_excluido(self):
-        df = self._velas_ob_bullish(com_mitigacao=True)
-        obs, _ = mapear_zonas_interesse(df, "EURUSD")
-        # OB bullish em [1.0980, 1.1060]: close abaixo do fundo (1.0960 < 1.0980) perfura a zona → mitigado
-        bullish_na_zona = [
-            ob for ob in obs
-            if ob.direcao == "ALTA" and abs(ob.preco_fundo - 1.0980) < 0.0001
-        ]
-        assert len(bullish_na_zona) == 0
-
-    def test_obs_retornados_nao_sao_mitigados(self):
-        df = self._velas_ob_bullish()
-        obs, _ = mapear_zonas_interesse(df, "EURUSD")
-        for ob in obs:
-            assert not ob.mitigado
-
-    def test_ob_fora_do_horizonte_ignorado(self):
-        ts = _ts(200)
-        velas = [_montar_vela(ts[i], 1.1000, 1.1050, 1.0950, 1.1010) for i in range(200)]
-        # OB bullish no índice 50 — fora do horizonte de 100 velas (inicio=100 para len=200)
-        velas[50] = _montar_vela(ts[50], 1.1020, 1.1060, 1.0980, 1.0990)  # bearish
-        velas[51] = _montar_vela(ts[51], 1.0990, 1.1120, 1.0985, 1.1100)  # bullish
-        velas[52] = _montar_vela(ts[52], 1.1100, 1.1180, 1.1090, 1.1170)  # bullish
-        velas[53] = _montar_vela(ts[53], 1.1170, 1.1230, 1.1160, 1.1220)  # bullish
-
-        obs, _ = mapear_zonas_interesse(_df(velas), "EURUSD")
-        na_zona_antiga = [ob for ob in obs if ob.direcao == "ALTA" and abs(ob.preco_fundo - 1.0980) < 0.0001]
-        assert len(na_zona_antiga) == 0
-
-    def test_ob_bullish_rejeitado_impulso_plano(self):
-        ts = _ts(8)
-        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(8)]
-        # OB candidate: bearish, corpo=0.0090 → 1.5*corpo=0.0135
-        velas[3] = _montar_vela(ts[3], 1.1060, 1.1080, 1.0980, 1.0970)
-        # Impulso: corpo[4]=0.0010 (sem engolfo), close[4]==close[5] (não strictly increasing)
-        velas[4] = _montar_vela(ts[4], 1.1000, 1.1120, 1.0990, 1.1010)
-        velas[5] = _montar_vela(ts[5], 1.1010, 1.1130, 1.1005, 1.1010)  # mesmo close
-        velas[6] = _montar_vela(ts[6], 1.1010, 1.1220, 1.1000, 1.1080)
-
-        obs, _ = mapear_zonas_interesse(_df(velas), "EURUSD")
-        bullish_na_zona = [ob for ob in obs if ob.direcao == "ALTA" and abs(ob.preco_fundo - 1.0980) < 0.0001]
-        assert len(bullish_na_zona) == 0
-
-    def test_ob_ultima_vela_bearish_antes_do_impulso(self):
-        # Cenário 19: duas velas bearish consecutivas antes do impulso bullish.
-        # Apenas a última (índice 4) deve gerar OB; a primeira (índice 3) é rejeitada
-        # porque seu candle seguinte ainda é bearish.
-        ts = _ts(9)
-        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(9)]
-        # Primeira vela bearish — NÃO deve virar OB
-        velas[3] = _montar_vela(ts[3], 1.1060, 1.1080, 1.0940, 1.0980)
-        # Segunda vela bearish (última antes do impulso) — deve virar OB, zona [1.0920, 1.1000]
-        velas[4] = _montar_vela(ts[4], 1.1000, 1.1000, 1.0920, 1.0940)
-        # Impulso bullish: closes estritamente crescentes
-        velas[5] = _montar_vela(ts[5], 1.0950, 1.1120, 1.0945, 1.1100)
-        velas[6] = _montar_vela(ts[6], 1.1100, 1.1180, 1.1090, 1.1170)
-        velas[7] = _montar_vela(ts[7], 1.1170, 1.1230, 1.1160, 1.1220)
-
-        obs, _ = mapear_zonas_interesse(_df(velas), "EURUSD")
-        bullish = [ob for ob in obs if ob.direcao == "ALTA"]
-        # OB da primeira vela bearish (preco_fundo≈1.0940) não deve aparecer
-        ob_primeira = [ob for ob in bullish if abs(ob.preco_fundo - 1.0940) < 0.0001]
-        assert len(ob_primeira) == 0
-        # OB da segunda vela bearish (preco_fundo≈1.0920) deve aparecer
-        ob_ultima = [ob for ob in bullish if abs(ob.preco_fundo - 1.0920) < 0.0001]
-        assert len(ob_ultima) == 1
-
-
-# ---------------------------------------------------------------------------
-# Fair Value Gaps
-# ---------------------------------------------------------------------------
-
-class TestFairValueGap:
-    """
-    FVG bearish: v0.minima > v2.maxima.
-    FVG bullish: v0.maxima < v2.minima.
-    Velas subsequentes propositalmente fora do intervalo do gap para
-    não acionar mitigação.
-    """
-
-    def test_fvg_bearish_detectado(self):
-        ts = _ts(5)
-        # Candle padrão abaixo do gap
-        velas = [_montar_vela(ts[i], 1.0950, 1.1000, 1.0920, 1.0970) for i in range(5)]
-
-        # FVG bearish: v[0].minima=1.1040 > v[2].maxima=1.1020
-        velas[0] = _montar_vela(ts[0], 1.1060, 1.1080, 1.1040, 1.1070)  # minima=1.1040
-        velas[1] = _montar_vela(ts[1], 1.1070, 1.1090, 1.1050, 1.1080)  # vela central
-        velas[2] = _montar_vela(ts[2], 1.0990, 1.1020, 1.0960, 1.1000)  # maxima=1.1020
-
-        # Velas 3-4 têm maxima=1.1000 < 1.1040 (topo do FVG) → não mitiga
-        _, fvgs = mapear_zonas_interesse(_df(velas), "EURUSD")
-        bearish = [f for f in fvgs if f.direcao == "BAIXA"]
-        assert len(bearish) >= 1
-
-    def test_fvg_bullish_detectado(self):
-        ts = _ts(5)
-        # Candle padrão acima do gap
-        velas = [_montar_vela(ts[i], 1.1030, 1.1080, 1.1025, 1.1060) for i in range(5)]
-
-        # FVG bullish: v[0].maxima=1.1010 < v[2].minima=1.1020
-        velas[0] = _montar_vela(ts[0], 1.0990, 1.1010, 1.0970, 1.1000)  # maxima=1.1010
-        velas[1] = _montar_vela(ts[1], 1.1000, 1.1015, 1.0995, 1.1010)  # vela central
-        velas[2] = _montar_vela(ts[2], 1.1015, 1.1060, 1.1020, 1.1050)  # minima=1.1020
-
-        # Velas 3-4 têm minima=1.1025 > 1.1010 (fundo do FVG) → não mitiga
-        _, fvgs = mapear_zonas_interesse(_df(velas), "EURUSD")
-        bullish = [f for f in fvgs if f.direcao == "ALTA"]
-        assert len(bullish) >= 1
-
-    def test_fvg_fora_do_horizonte_ignorado(self):
-        ts = _ts(200)
-        velas = [_montar_vela(ts[i], 1.0950, 1.1000, 1.0920, 1.0970) for i in range(200)]
-        # FVG bearish no índice 50 — fora do horizonte de 100 velas (inicio=100 para len=200)
-        velas[50] = _montar_vela(ts[50], 1.1060, 1.1080, 1.1040, 1.1070)  # minima=1.1040
-        velas[51] = _montar_vela(ts[51], 1.1070, 1.1090, 1.1050, 1.1080)
-        velas[52] = _montar_vela(ts[52], 1.0990, 1.1020, 1.0960, 1.1000)  # maxima=1.1020
-
-        _, fvgs = mapear_zonas_interesse(_df(velas), "EURUSD")
-        fvg_antigo = [f for f in fvgs if f.direcao == "BAIXA" and abs(f.preco_topo - 1.1040) < 0.0001]
-        assert len(fvg_antigo) == 0
-
-    def test_fvg_mitigado_excluido(self):
-        ts = _ts(5)
-        velas = [_montar_vela(ts[i], 1.0950, 1.1000, 1.0920, 1.0970) for i in range(5)]
-        # FVG bearish: gap [1.1020, 1.1040]
-        velas[0] = _montar_vela(ts[0], 1.1060, 1.1080, 1.1040, 1.1070)
-        velas[1] = _montar_vela(ts[1], 1.1070, 1.1090, 1.1050, 1.1080)
-        velas[2] = _montar_vela(ts[2], 1.0990, 1.1020, 1.0960, 1.1000)
-        # Vela que mitiga: negocia por todo o gap (minima ≤ 1.1020 AND maxima ≥ 1.1040)
-        velas[3] = _montar_vela(ts[3], 1.1050, 1.1060, 1.1010, 1.1045)
-        velas[4] = _montar_vela(ts[4], 1.0950, 1.1000, 1.0920, 1.0970)
-
-        _, fvgs = mapear_zonas_interesse(_df(velas), "EURUSD")
-        bearish_gap = [
-            f for f in fvgs
-            if f.direcao == "BAIXA" and abs(f.preco_fundo - 1.1020) < 0.0001
-        ]
-        assert len(bearish_gap) == 0
-
-
-# ---------------------------------------------------------------------------
 # Internos
 # ---------------------------------------------------------------------------
 
@@ -297,145 +115,117 @@ class TestInternos:
 
 
 # ---------------------------------------------------------------------------
-# OB Testado
+# pool_varrido_por_sweep
 # ---------------------------------------------------------------------------
 
-class TestObTestado:
+class TestPoolVarridoPorSweep:
     """
-    OB ALTA zona [1.0980, 1.1060].
-    Impulso: candles 4-6 abrem a partir de ~1.0990 (dentro/abaixo do topo).
-    Retrace: candle que abre ACIMA do topo (1.1060) e cujo wick entra na zona.
+    Valida o matching entre pools de liquidez e eventos CapturaLiquidez.
+
+    Regras:
+      - EQH/PDH (liquidez acima) → exigem sweep BAIXA (wick varreu máxima).
+      - EQL/PDL (liquidez abaixo) → exigem sweep ALTA (wick varreu mínima).
+      - Proximidade limitada por ``pool.tolerancia``.
     """
 
-    def _velas_ob_alta_com_retrace(self, incluir_retrace: bool) -> pd.DataFrame:
-        ts = _ts(9)
-        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(9)]
-        # OB ALTA: bearish em [1.0980, 1.1060]
-        velas[3] = _montar_vela(ts[3], 1.1020, 1.1060, 1.0980, 1.0990)
-        # Impulso bullish — abrem próximos ao close da vela OB (≈1.0990 < topo=1.1060)
-        velas[4] = _montar_vela(ts[4], 1.0990, 1.1120, 1.0985, 1.1100)
-        velas[5] = _montar_vela(ts[5], 1.1100, 1.1180, 1.1090, 1.1170)
-        velas[6] = _montar_vela(ts[6], 1.1170, 1.1230, 1.1160, 1.1220)
-        if incluir_retrace:
-            # Retrace: abre ACIMA do topo (1.1200 > 1.1060), wick entra na zona (minima=1.1040 <= 1.1060)
-            velas[7] = _montar_vela(ts[7], 1.1200, 1.1210, 1.1040, 1.1150)
-        else:
-            velas[7] = _montar_vela(ts[7], 1.1220, 1.1280, 1.1200, 1.1250)
-        return _df(velas)
-
-    def test_ob_virgem_sem_retrace(self):
-        # Cenário 23: nenhum candle retorna à zona → testado = False
-        df = self._velas_ob_alta_com_retrace(incluir_retrace=False)
-        obs, _ = mapear_zonas_interesse(df, "EURUSD")
-        ob = next((o for o in obs if o.direcao == "ALTA"), None)
-        assert ob is not None
-        assert ob.testado is False
-
-    def test_ob_testado_com_retrace(self):
-        # Cenário 24: candle abre acima do topo e wick entra na zona → testado = True
-        df = self._velas_ob_alta_com_retrace(incluir_retrace=True)
-        obs, _ = mapear_zonas_interesse(df, "EURUSD")
-        ob = next((o for o in obs if o.direcao == "ALTA"), None)
-        assert ob is not None
-        assert ob.testado is True
-
-    def test_impulso_nao_marca_como_testado(self):
-        # Cenário 25: candles do impulso abrem abaixo do topo → não contam como retrace
-        ts = _ts(8)
-        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(8)]
-        velas[3] = _montar_vela(ts[3], 1.1020, 1.1060, 1.0980, 1.0990)
-        # Impulso: todos abrem abaixo de ob.preco_topo=1.1060
-        velas[4] = _montar_vela(ts[4], 1.0990, 1.1120, 1.0985, 1.1100)
-        velas[5] = _montar_vela(ts[5], 1.1100, 1.1180, 1.1090, 1.1170)
-        velas[6] = _montar_vela(ts[6], 1.1170, 1.1230, 1.1160, 1.1220)
-
-        ob_alvo = OrderBlock(
-            id="ob_t", simbolo="EURUSD", direcao="ALTA",
-            preco_topo=1.1060, preco_fundo=1.0980,
-            tempo=pd.Timestamp(ts[3], tz="UTC").to_pydatetime(),
+    @staticmethod
+    def _pool(tipo: str, preco: float, tolerancia: float = 0.0010) -> PoolLiquidez:
+        return PoolLiquidez(
+            id="pool-x",
+            simbolo="EURUSD",
+            tipo=tipo,
+            preco=preco,
+            tolerancia=tolerancia,
+            tempo=datetime(2024, 1, 1, tzinfo=timezone.utc),
         )
-        _marcar_obs_testados([ob_alvo], _df(velas))
-        assert ob_alvo.testado is False
 
-    def test_ob_mitigado_ignorado_por_testados(self):
-        # Cenário 26: OB mitigado não deve ser marcado como testado
-        ts = _ts(8)
-        velas = [_montar_vela(ts[i], 1.0850, 1.0900, 1.0800, 1.0870) for i in range(8)]
-        velas[3] = _montar_vela(ts[3], 1.1020, 1.1060, 1.0980, 1.0990)
-        # Retrace que abriria como teste
-        velas[7] = _montar_vela(ts[7], 1.1200, 1.1210, 1.1040, 1.1150)
-
-        ob_mitigado = OrderBlock(
-            id="ob_m", simbolo="EURUSD", direcao="ALTA",
-            preco_topo=1.1060, preco_fundo=1.0980,
-            tempo=pd.Timestamp(ts[3], tz="UTC").to_pydatetime(),
-            mitigado=True,
+    @staticmethod
+    def _captura(direcao: str, preco: float) -> CapturaLiquidez:
+        return CapturaLiquidez(
+            simbolo="EURUSD",
+            direcao=direcao,
+            preco_varredura=preco,
+            tempo=datetime(2024, 1, 1, 4, tzinfo=timezone.utc),
+            pavio_percentual=0.40,
         )
-        _marcar_obs_testados([ob_mitigado], _df(velas))
-        assert ob_mitigado.testado is False
+
+    def test_eqh_com_captura_bearish_proxima(self):
+        pool = self._pool("EQH", 1.1050)
+        capturas = [self._captura("BAIXA", 1.1052)]
+        assert pool_varrido_por_sweep(pool, capturas) is not None
+
+    def test_eqh_com_captura_bearish_distante(self):
+        # Distância 0.0020 > tolerancia 0.0010 → não varrido
+        pool = self._pool("EQH", 1.1050, tolerancia=0.0010)
+        capturas = [self._captura("BAIXA", 1.1070)]
+        assert pool_varrido_por_sweep(pool, capturas) is None
+
+    def test_eql_com_captura_bullish_proxima(self):
+        pool = self._pool("EQL", 1.0950)
+        capturas = [self._captura("ALTA", 1.0948)]
+        assert pool_varrido_por_sweep(pool, capturas) is not None
+
+    def test_eqh_com_captura_bullish_direcao_errada(self):
+        # EQH exige sweep BAIXA; captura ALTA não varre o pool
+        pool = self._pool("EQH", 1.1050)
+        capturas = [self._captura("ALTA", 1.1050)]
+        assert pool_varrido_por_sweep(pool, capturas) is None
+
+    def test_pdh_com_captura_bearish_proxima(self):
+        pool = self._pool("PDH", 1.1100)
+        capturas = [self._captura("BAIXA", 1.1101)]
+        assert pool_varrido_por_sweep(pool, capturas) is not None
+
+    def test_pdl_com_captura_bullish_proxima(self):
+        pool = self._pool("PDL", 1.0900)
+        capturas = [self._captura("ALTA", 1.0905)]
+        # 0.0005 está dentro da tolerância padrão (0.0010)
+        assert pool_varrido_por_sweep(pool, capturas) is not None
+
+    def test_lista_vazia_de_capturas(self):
+        pool = self._pool("EQH", 1.1050)
+        assert pool_varrido_por_sweep(pool, []) is None
+
+    def test_retorna_captura_correta(self):
+        # Verifica que a CapturaLiquidez retornada é a que fez o match
+        pool = self._pool("EQH", 1.1050)
+        c1 = self._captura("BAIXA", 1.1200)  # distante — não varre
+        c2 = self._captura("BAIXA", 1.1051)  # próxima — varre
+        resultado = pool_varrido_por_sweep(pool, [c1, c2])
+        assert resultado is c2
 
 
 # ---------------------------------------------------------------------------
-# FVG Testado
+# Janela de capturas (C3 — alinhada com EQH/EQL: 50 velas)
 # ---------------------------------------------------------------------------
 
-class TestFvgTestado:
+class TestJanelaCapturas:
     """
-    FVG ALTA zona [1.1010, 1.1020] (fundo=v0.maxima, topo=v2.minima).
-    Retrace: candle que abre ACIMA do topo (1.1020) e cujo wick entra no gap.
-    FVG BAIXA zona [1.1020, 1.1040] (fundo=v2.maxima, topo=v0.minima).
-    Retrace: candle que abre ABAIXO do fundo (1.1020) e cujo wick entra no gap.
+    Sweep a mais de 15 candles do fim (mas dentro de 50) deve ser detectado.
+
+    Design da fixture (n=40, periodo=5):
+      - Janela antiga: max(5, 40-16) = 24 → varre [24:39]; sweep no índice 20 → PERDIDO
+      - Janela nova:   max(5, 40-51) =  5 → varre [5:39];  sweep no índice 20 → ENCONTRADO
+      - Candles neutros com maxima=1.0950 < swing (1.1200) evitam swing-highs intermediários
+        na janela [9:20] porque a janela de cada índice 9-13 inclui o índice 14 (1.1200).
     """
 
-    def _fvg_alta(self, mitigado: bool = False) -> FairValueGap:
-        return FairValueGap(
-            id="fvg_a", simbolo="EURUSD", direcao="ALTA",
-            preco_topo=1.1020, preco_fundo=1.1010,
-            tempo=pd.Timestamp("2024-01-01 08:00:00", tz="UTC").to_pydatetime(),
-            mitigado=mitigado,
-        )
+    def test_sweep_fora_janela_15_dentro_janela_50(self):
+        # 40 velas; swing no índice 14, sweep no índice 20
+        ts = _ts(40)
+        velas = [_montar_vela(ts[i], 1.1000, 1.0950, 1.0900, 1.0930) for i in range(40)]
 
-    def _velas_pos(self, abertura: float, maxima: float, minima: float, fechamento: float) -> pd.DataFrame:
-        ts = [
-            pd.Timestamp("2024-01-01 04:00:00", tz="UTC"),  # antes do FVG (ignorada)
-            pd.Timestamp("2024-01-01 12:00:00", tz="UTC"),  # posterior ao FVG
-        ]
-        return pd.DataFrame([
-            {"tempo": ts[0], "abertura": 1.1000, "maxima": 1.1005, "minima": 1.0995, "fechamento": 1.1002, "volume": 100},
-            {"tempo": ts[1], "abertura": abertura, "maxima": maxima, "minima": minima, "fechamento": fechamento, "volume": 100},
-        ])
+        # Swing high no índice 14 (ao menos 6 candles antes do sweep → não entra na janela do swing)
+        velas[14] = _montar_vela(ts[14], 1.1000, 1.1200, 1.0950, 1.1100)
 
-    def test_fvg_virgem_sem_retrace(self):
-        # Cenário 27: nenhum candle toca o FVG → testado = False
-        fvg = self._fvg_alta()
-        # Candle posterior fica bem acima do gap (minima=1.1025 > topo=1.1020)
-        df = self._velas_pos(1.1030, 1.1050, 1.1025, 1.1040)
-        _marcar_fvgs_testados([fvg], df)
-        assert fvg.testado is False
+        # Sweep no índice 20: wick acima do swing (1.1200), fecha abaixo, pavio 40%
+        range_v = 0.0150
+        high  = 1.1200 + 0.0010           # 1.1210
+        low   = high - range_v             # 1.1060
+        close = high - 0.40 * range_v - 0.0001  # 1.1149
+        open_ = close - 0.0010
+        velas[20] = _montar_vela(ts[20], open_, high, low, close)
 
-    def test_fvg_testado_com_retrace(self):
-        # Cenário 28: candle abre acima do topo e wick entra no gap → testado = True
-        fvg = self._fvg_alta()
-        # abertura=1.1025 >= topo=1.1020 ✓; minima=1.1015 <= topo=1.1020 ✓
-        df = self._velas_pos(1.1025, 1.1030, 1.1015, 1.1022)
-        _marcar_fvgs_testados([fvg], df)
-        assert fvg.testado is True
-
-    def test_fvg_mitigado_ignorado(self):
-        # Cenário 29: FVG mitigado não deve ser marcado como testado
-        fvg = self._fvg_alta(mitigado=True)
-        df = self._velas_pos(1.1025, 1.1030, 1.1015, 1.1022)
-        _marcar_fvgs_testados([fvg], df)
-        assert fvg.testado is False
-
-    def test_fvg_baixa_testado(self):
-        # Cenário 30: FVG BAIXA — candle abre abaixo do fundo e wick entra no gap
-        fvg = FairValueGap(
-            id="fvg_b", simbolo="EURUSD", direcao="BAIXA",
-            preco_topo=1.1040, preco_fundo=1.1020,
-            tempo=pd.Timestamp("2024-01-01 04:00:00", tz="UTC").to_pydatetime(),
-        )
-        # abertura=1.1015 <= fundo=1.1020 ✓; maxima=1.1025 >= fundo=1.1020 ✓
-        df = self._velas_pos(1.1015, 1.1025, 1.1010, 1.1018)
-        _marcar_fvgs_testados([fvg], df)
-        assert fvg.testado is True
+        df = _df(velas)
+        capturas = detectar_captura_liquidez(df, periodo_swing=5, limiar_pavio=0.30)
+        assert any(c.direcao == "BAIXA" for c in capturas)
