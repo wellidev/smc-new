@@ -24,22 +24,6 @@ _SQL_CRIAR_INDICE_VELAS = """
                           CREATE INDEX IF NOT EXISTS idx_velas_lookup ON velas (simbolo, timeframe, tempo DESC); \
                           """
 
-_SQL_CRIAR_SINAIS = """
-                    CREATE TABLE IF NOT EXISTS sinais
-                    (
-                        id_sinal        TEXT PRIMARY KEY,
-                        simbolo         TEXT NOT NULL,
-                        ob_id           TEXT NOT NULL,
-                        fvg_id          TEXT NOT NULL,
-                        direcao         TEXT NOT NULL,
-                        preco_ob_topo   REAL,
-                        preco_ob_fundo  REAL,
-                        preco_fvg_topo  REAL,
-                        preco_fvg_fundo REAL,
-                        timestamp       TEXT NOT NULL
-                    ); \
-                    """
-
 _SQL_ULTIMO_TEMPO_VELA = "SELECT MAX(tempo) FROM velas WHERE simbolo = ? AND timeframe = ?"
 
 _SQL_INSERIR_VELA = """
@@ -57,15 +41,6 @@ _SQL_BUSCAR_VELAS = """
                           LIMIT ?)
                     ORDER BY tempo \
                     """
-
-_SQL_SINAL_EXISTE = "SELECT 1 FROM sinais WHERE id_sinal = ?"
-
-_SQL_INSERIR_SINAL = """
-                     INSERT OR IGNORE INTO sinais
-                     (id_sinal, simbolo, ob_id, fvg_id, direcao, preco_ob_topo, preco_ob_fundo,
-                      preco_fvg_topo, preco_fvg_fundo, timestamp)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                     """
 
 _SQL_CRIAR_SETUPS = """
 CREATE TABLE IF NOT EXISTS setups (
@@ -137,7 +112,6 @@ class Repositorio:
         self._conn = sqlite3.connect(caminho)
         self._conn.execute(_SQL_CRIAR_VELAS)
         self._conn.execute(_SQL_CRIAR_INDICE_VELAS)
-        self._conn.execute(_SQL_CRIAR_SINAIS)
         self._conn.execute(_SQL_CRIAR_SETUPS)
         self._conn.execute(_SQL_CRIAR_CONFIRMACOES)
         self._conn.commit()
@@ -163,39 +137,7 @@ class Repositorio:
         cursor = self._conn.execute(_SQL_BUSCAR_VELAS, (simbolo, timeframe, quantidade))
         return cursor.fetchall()
 
-    # --- Sinais ---
-
-    def sinal_ja_disparado(self, id_sinal: str) -> bool:
-        cursor = self._conn.execute(_SQL_SINAL_EXISTE, (id_sinal,))
-        return cursor.fetchone() is not None
-
-    def persistir_sinal(self, id_sinal: str, simbolo: str, ob, fvg, direcao: str) -> None:
-        agora = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(_SQL_INSERIR_SINAL, (
-            id_sinal, simbolo, ob.id, fvg.id, direcao,
-            ob.preco_topo, ob.preco_fundo,
-            fvg.preco_topo, fvg.preco_fundo,
-            agora,
-        ))
-        self._conn.commit()
-
-    def registrar_sinal_v2(
-        self,
-        id_sinal: str,
-        setup_id: str,
-        simbolo: str,
-        direcao: str,
-        poi_fundo: float,
-        poi_topo: float,
-    ) -> None:
-        agora = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(_SQL_INSERIR_SINAL, (
-            id_sinal, simbolo, setup_id, setup_id,
-            direcao, poi_topo, poi_fundo, poi_topo, poi_fundo, agora,
-        ))
-        self._conn.commit()
-
-    # --- Setups (Phase 5) ---
+    # --- Setups ---
 
     def setup_ja_existe(self, id_setup: str) -> bool:
         cursor = self._conn.execute(_SQL_SETUP_EXISTE, (id_setup,))

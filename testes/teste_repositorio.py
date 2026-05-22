@@ -1,5 +1,4 @@
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
 
 from smc.repositorio import Repositorio
 
@@ -18,7 +17,8 @@ class TestInicializacao:
         cursor = repo._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
         tabelas = {row[0] for row in cursor.fetchall()}
         assert "velas" in tabelas
-        assert "sinais" in tabelas
+        assert "setups" in tabelas
+        assert "confirmacoes" in tabelas
         repo.fechar()
 
     def test_fechar_sem_erro(self):
@@ -65,32 +65,3 @@ class TestVelas:
         assert len(resultado) == 3
 
 
-class TestSinais:
-    def _ob(self):
-        ob = MagicMock()
-        ob.id = "ob1"
-        ob.preco_topo = 1.1050
-        ob.preco_fundo = 1.1000
-        return ob
-
-    def _fvg(self):
-        fvg = MagicMock()
-        fvg.id = "fvg1"
-        fvg.preco_topo = 1.1040
-        fvg.preco_fundo = 1.1010
-        return fvg
-
-    def test_sinal_novo_retorna_false(self):
-        repo = _repo()
-        assert repo.sinal_ja_disparado("abc123") is False
-
-    def test_persistir_sinal_e_verificar(self):
-        repo = _repo()
-        repo.persistir_sinal("abc123", "EURUSD", self._ob(), self._fvg(), "alta")
-        assert repo.sinal_ja_disparado("abc123") is True
-
-    def test_sinais_diferentes_independentes(self):
-        repo = _repo()
-        repo.persistir_sinal("sinal1", "EURUSD", self._ob(), self._fvg(), "alta")
-        assert repo.sinal_ja_disparado("sinal1") is True
-        assert repo.sinal_ja_disparado("sinal2") is False

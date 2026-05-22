@@ -1,4 +1,3 @@
-import hashlib
 import logging.handlers
 import os
 import time
@@ -292,13 +291,6 @@ def _verificar_confirmacoes(
                 rr=rr,
             )
 
-        id_sinal = hashlib.sha1(
-            f"{setup_id}|{confirmacao.tempo.isoformat()}".encode()
-        ).hexdigest()[:20]
-
-        if repo.sinal_ja_disparado(id_sinal):
-            continue
-
         bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
         em_sessao = verificar_sessao(datetime.now(timezone.utc))
         zona_ok = (
@@ -348,7 +340,6 @@ def _verificar_confirmacoes(
             tp=confirmacao.tp,
             rr=confirmacao.rr,
         )
-        repo.registrar_sinal_v2(id_sinal, setup_id, simbolo, direcao, poi_fundo, poi_topo)
 
         enviado = notificador.enviar_alerta(mensagem)
         if enviado:

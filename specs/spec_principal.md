@@ -25,7 +25,7 @@ para cada símbolo em ATIVOS_MONITORADOS:
        b. calcular TP/SL com R:R 1:2
        c. id_sinal = SHA1(simbolo + ob.id + fvg.id)
        d. verificar no SQLite se id_sinal já existe
-       e. se novo → INSERT em tabela_sinais + enviar alerta Telegram
+       e. enviar alerta Telegram
 ```
 
 ## Filtros Contextuais (informativos)
@@ -55,7 +55,7 @@ bos_qualidade = "Forte 💪" if bos.deslocamento else "Normal"
 Ver `specs/spec_repositorio.md` — toda comunicação com o banco é feita via `Repositorio`.
 
 ## Repositorio
-`principal.py` instancia `Repositorio(CAMINHO_BANCO)` e o injeta em `ProvedorDados`. Operações de deduplicação de sinais usam `repo.sinal_ja_disparado()` e `repo.persistir_sinal()`.
+`principal.py` instancia `Repositorio(CAMINHO_BANCO)` e o injeta em `ProvedorDados`. Deduplicação de confirmações via `confirmacoes.id` (PRIMARY KEY + INSERT OR IGNORE) e `setups.ativo=0`.
 
 ## Tratamento de Erros no Loop
 

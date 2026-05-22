@@ -101,15 +101,12 @@ para cada setup em setups_ativos:
         se not (setup.poi_fundo <= preco_atual <= setup.poi_topo): continue
         confirmacao = ConfirmacaoEntrada(tipo_confirmacao="DIRETO", preco_confirmacao=preco_atual, ...)
 
-    id_sinal = SHA1(setup.id|confirmacao.tempo.isoformat())[:20]
-    se repo.sinal_ja_disparado(id_sinal): continue
-
     # Calcular filtros contextuais (informativos)
     ctx = _calcular_contexto_v2(setup, confirmacao, velas_d1)
 
     mensagem = _construir_mensagem_v2(simbolo, setup, confirmacao, ctx)
-    repo.persistir_sinal(id_sinal, simbolo, setup_id=setup.id, ...)
-    repo.desativar_setup(setup.id)
+    repo.persistir_confirmacao(...)   # INSERT OR IGNORE — dedup via confirmacoes.id (PK)
+    repo.desativar_setup(setup.id)    # ativo=0 — exclui da fila em ciclos futuros
     notificador.enviar(mensagem)
 ```
 
