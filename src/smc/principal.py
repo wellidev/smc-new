@@ -273,7 +273,7 @@ def _verificar_confirmacoes(
         if EXIGIR_CONFIRMACAO_LTF:
             evento_tempo = datetime.fromisoformat(evento_tempo_str)
             confirmacao = detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo,
-                                              cutoff=evento_tempo, atr=atr)
+                                              cutoff=evento_tempo, atr=atr, tp_ref=evento_nivel)
             if confirmacao is None:
                 continue
             confirmacao.setup_id = setup_id
@@ -281,7 +281,8 @@ def _verificar_confirmacoes(
         else:
             if not (poi_fundo <= preco_atual <= poi_topo):
                 continue
-            rr_result = _calcular_risco_rr_v2(preco_atual, poi_fundo, poi_topo, direcao, atr)
+            sl_ref = poi_fundo if direcao == "ALTA" else poi_topo
+            rr_result = _calcular_risco_rr_v2(preco_atual, sl_ref, direcao, atr, tp_ref=evento_nivel)
             if rr_result is None:
                 logger.debug("Setup %s ignorado: risco nulo (poi degenerado)", simbolo)
                 continue

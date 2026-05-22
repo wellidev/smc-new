@@ -667,6 +667,7 @@ def detectar_mss_no_poi(
     simbolo: str,
     cutoff: datetime | None = None,
     atr: float = 0.0,
+    tp_ref: float | None = None,
 ) -> ConfirmacaoEntrada | None:
     """Detect Market Structure Shift (ChoCH LTF) on M5 within the POI zone.
 
@@ -699,6 +700,7 @@ def detectar_mss_no_poi(
         # Para cada swing LOW em ordem cronológica, procurar o primeiro swing
         # HIGH posterior e então uma vela que feche acima desse swing HIGH.
         for sl_idx in sorted(swings_low.keys()):
+            sl_ref = swings_low[sl_idx]  # invalidação: abaixo deste low o MSS falhou
             sh_candidates = {idx: p for idx, p in swings_high.items() if idx > sl_idx}
             if not sh_candidates:
                 continue
@@ -708,7 +710,7 @@ def detectar_mss_no_poi(
                 v = velas_poi.iloc[j]
                 if float(v["fechamento"]) > sh_price:
                     preco = float(v["fechamento"])
-                    rr_result = _calcular_risco_rr_v2(preco, poi_fundo, poi_topo, direcao, atr)
+                    rr_result = _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref)
                     if rr_result is None:
                         continue
                     sl, tp, rr = rr_result
@@ -726,6 +728,7 @@ def detectar_mss_no_poi(
                     )
     else:  # BAIXA — simétrico
         for sh_idx in sorted(swings_high.keys()):
+            sl_ref = swings_high[sh_idx]  # invalidação: acima deste high o MSS falhou
             sl_candidates = {idx: p for idx, p in swings_low.items() if idx > sh_idx}
             if not sl_candidates:
                 continue
@@ -735,7 +738,7 @@ def detectar_mss_no_poi(
                 v = velas_poi.iloc[j]
                 if float(v["fechamento"]) < sl_price:
                     preco = float(v["fechamento"])
-                    rr_result = _calcular_risco_rr_v2(preco, poi_fundo, poi_topo, direcao, atr)
+                    rr_result = _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref)
                     if rr_result is None:
                         continue
                     sl, tp, rr = rr_result
@@ -789,23 +792,34 @@ def calcular_score_setup(
 
 def _calcular_risco_rr_v2(
     preco_entrada: float,
-    poi_fundo: float,
-    poi_topo: float,
+    sl_ref: float,
     direcao: str,
     atr: float = 0.0,
+    tp_ref: float | None = None,
 ) -> tuple[float, float, float] | None:
     buffer = 0.1 * atr
     if direcao == "ALTA":
-        sl = poi_fundo - buffer
+        sl = sl_ref - buffer
         risco = preco_entrada - sl
-        tp = preco_entrada + 2.0 * risco
+        if risco <= 0:
+            return None
+        tp_candidato = tp_ref if (tp_ref is not None and tp_ref > preco_entrada) else None
+        if tp_candidato is not None and (tp_candidato - preco_entrada) / risco >= 1.5:
+            tp = tp_candidato
+        else:
+            tp = preco_entrada + 2.0 * risco
     else:
-        sl = poi_topo + buffer
+        sl = sl_ref + buffer
         risco = sl - preco_entrada
-        tp = preco_entrada - 2.0 * risco
-    if risco <= 0:
-        return None
-    return sl, tp, 2.0
+        if risco <= 0:
+            return None
+        tp_candidato = tp_ref if (tp_ref is not None and tp_ref < preco_entrada) else None
+        if tp_candidato is not None and (preco_entrada - tp_candidato) / risco >= 1.5:
+            tp = tp_candidato
+        else:
+            tp = preco_entrada - 2.0 * risco
+    rr = abs(tp - preco_entrada) / risco
+    return sl, tp, round(rr, 2)
 
 
 def _gerar_id_ob_v2(simbolo: str, leg_id: str, tempo: datetime) -> str:

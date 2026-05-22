@@ -245,7 +245,7 @@ class TestCalcularScoreSetup:
 
 class TestCalcularRiscoRrV2:
     def test_alta_sl_abaixo_entrada(self):
-        result = _calcular_risco_rr_v2(1.1100, 1.1000, 1.1060, "ALTA")
+        result = _calcular_risco_rr_v2(1.1100, 1.1000, "ALTA")
         assert result is not None
         sl, tp, rr = result
         assert sl == pytest.approx(1.1000)
@@ -253,37 +253,34 @@ class TestCalcularRiscoRrV2:
         assert rr == pytest.approx(2.0)
 
     def test_baixa_sl_acima_entrada(self):
-        result = _calcular_risco_rr_v2(1.1050, 1.1000, 1.1100, "BAIXA")
+        result = _calcular_risco_rr_v2(1.1050, 1.1100, "BAIXA")
         assert result is not None
         sl, tp, rr = result
         assert sl == pytest.approx(1.1100)
         assert tp == pytest.approx(1.1050 - 2 * (1.1100 - 1.1050))
         assert rr == pytest.approx(2.0)
 
-    def test_rr_sempre_2(self):
-        for direcao, entrada, f, t in [
-            ("ALTA", 1.1050, 1.1000, 1.1060),
-            ("BAIXA", 1.1030, 1.1000, 1.1060),
+    def test_rr_fallback_2_sem_tp_ref(self):
+        for direcao, entrada, sl_ref in [
+            ("ALTA", 1.1050, 1.1000),
+            ("BAIXA", 1.1030, 1.1060),
         ]:
-            result = _calcular_risco_rr_v2(entrada, f, t, direcao)
+            result = _calcular_risco_rr_v2(entrada, sl_ref, direcao)
             assert result is not None
             _, _, rr = result
             assert rr == pytest.approx(2.0)
 
     def test_risco_nulo_retorna_none(self):
-        # ALTA: preco_entrada <= poi_fundo → risco <= 0
-        result = _calcular_risco_rr_v2(1.1000, 1.1000, 1.1060, "ALTA")
+        result = _calcular_risco_rr_v2(1.1000, 1.1000, "ALTA")
         assert result is None
 
     def test_risco_negativo_retorna_none(self):
-        # BAIXA: preco_entrada >= poi_topo → risco <= 0
-        result = _calcular_risco_rr_v2(1.1100, 1.1000, 1.1100, "BAIXA")
+        result = _calcular_risco_rr_v2(1.1100, 1.1100, "BAIXA")
         assert result is None
 
     def test_alta_sl_com_buffer_atr(self):
-        # atr=0.0010 → buffer=0.0001 → sl = poi_fundo - 0.0001
         atr = 0.0010
-        result = _calcular_risco_rr_v2(1.1100, 1.1000, 1.1060, "ALTA", atr=atr)
+        result = _calcular_risco_rr_v2(1.1100, 1.1000, "ALTA", atr=atr)
         assert result is not None
         sl, tp, rr = result
         assert sl == pytest.approx(1.1000 - 0.1 * atr)
@@ -292,12 +289,38 @@ class TestCalcularRiscoRrV2:
         assert rr == pytest.approx(2.0)
 
     def test_baixa_sl_com_buffer_atr(self):
-        # atr=0.0010 → buffer=0.0001 → sl = poi_topo + 0.0001
         atr = 0.0010
-        result = _calcular_risco_rr_v2(1.1050, 1.1000, 1.1100, "BAIXA", atr=atr)
+        result = _calcular_risco_rr_v2(1.1050, 1.1100, "BAIXA", atr=atr)
         assert result is not None
         sl, tp, rr = result
         assert sl == pytest.approx(1.1100 + 0.1 * atr)
         risco = sl - 1.1050
         assert tp == pytest.approx(1.1050 - 2.0 * risco)
+        assert rr == pytest.approx(2.0)
+
+    def test_alta_tp_estrutural_rr_suficiente(self):
+        # tp_ref=1.1200 → rr = (1.1200-1.1050)/0.0050 = 3.0 ≥ 1.5 → usa tp_ref
+        result = _calcular_risco_rr_v2(1.1050, 1.1000, "ALTA", tp_ref=1.1200)
+        assert result is not None
+        sl, tp, rr = result
+        assert sl == pytest.approx(1.1000)
+        assert tp == pytest.approx(1.1200)
+        assert rr == pytest.approx(3.0)
+
+    def test_alta_tp_estrutural_rr_insuficiente(self):
+        # tp_ref=1.1080 → rr = (1.1080-1.1050)/0.0050 = 0.6 < 1.5 → fallback 2×
+        result = _calcular_risco_rr_v2(1.1050, 1.1000, "ALTA", tp_ref=1.1080)
+        assert result is not None
+        sl, tp, rr = result
+        assert sl == pytest.approx(1.1000)
+        assert tp == pytest.approx(1.1050 + 2 * (1.1050 - 1.1000))
+        assert rr == pytest.approx(2.0)
+
+    def test_baixa_tp_estrutural_rr_suficiente(self):
+        # tp_ref=1.0950 → rr = (1.1050-1.0950)/0.0050 = 2.0 ≥ 1.5 → usa tp_ref
+        result = _calcular_risco_rr_v2(1.1050, 1.1100, "BAIXA", tp_ref=1.0950)
+        assert result is not None
+        sl, tp, rr = result
+        assert sl == pytest.approx(1.1100)
+        assert tp == pytest.approx(1.0950)
         assert rr == pytest.approx(2.0)

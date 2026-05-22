@@ -136,7 +136,12 @@ o preço forma micro-estrutura interna e a primeira vela que fecha além do
               retornar ConfirmacaoEntrada(tipo="MSS", ...)
 6. Para direcao="BAIXA" (setup de venda): simétrico — swing HIGH primeiro,
    depois swing LOW posterior, depois fechamento abaixo do swing LOW.
-7. RR/SL/TP via _calcular_risco_rr_v2(preco, poi_fundo, poi_topo, direcao);
+7. SL/TP via _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref):
+   - Para ALTA: sl_ref = swings_low[sl_idx] — o swing low que iniciou a sequência MSS
+     (ponto de invalidação estrutural: abaixo dele a tese de compra falha)
+   - Para BAIXA: sl_ref = swings_high[sh_idx] — o swing high que iniciou a sequência MSS
+     (ponto de invalidação estrutural: acima dele a tese de venda falha)
+   - tp_ref: evento_nivel (nível do ChoCH/BOS H4 que gerou o setup), injetado pelo caller
    se retornar None (risco <= 0), pular essa candidata.
 8. Se nada encontrado: return None.
 ```
@@ -168,25 +173,37 @@ Score composicional 0–100:
 
 ---
 
-## `_calcular_risco_rr_v2(preco_entrada, poi_fundo, poi_topo, direcao, atr=0.0) -> tuple[float, float, float] | None`
+## `_calcular_risco_rr_v2(preco_entrada, sl_ref, direcao, atr=0.0, tp_ref=None) -> tuple[float, float, float] | None`
 
 ```python
-buffer = 0.1 * atr   # buffer anti-ruído abaixo/acima da POI
+buffer = 0.1 * atr
 se direcao == "ALTA":
-    sl = poi_fundo - buffer   # abaixo da zona de demanda + margem ATR
+    sl = sl_ref - buffer        # sl_ref = swing low estrutural do MSS (M5) ou poi_fundo no modo DIRETO
     risco = preco_entrada - sl
-    tp = preco_entrada + 2 * risco
+    se risco <= 0: return None
+    tp_candidato = tp_ref se (tp_ref is not None and tp_ref > preco_entrada) else None
+    se tp_candidato and (tp_candidato - preco_entrada) / risco >= 1.5:
+        tp = tp_candidato       # alvo estrutural: nível ChoCH/BOS H4
+    else:
+        tp = preco_entrada + 2.0 * risco   # fallback mecânico
 else:
-    sl = poi_topo + buffer    # acima da zona de oferta + margem ATR
+    sl = sl_ref + buffer        # sl_ref = swing high estrutural do MSS (M5) ou poi_topo no modo DIRETO
     risco = sl - preco_entrada
-    tp = preco_entrada - 2 * risco
+    se risco <= 0: return None
+    tp_candidato = tp_ref se (tp_ref is not None and tp_ref < preco_entrada) else None
+    se tp_candidato and (preco_entrada - tp_candidato) / risco >= 1.5:
+        tp = tp_candidato
+    else:
+        tp = preco_entrada - 2.0 * risco
 
-se risco <= 0: return None
-return sl, tp, 2.0
+rr = abs(tp - preco_entrada) / risco
+return sl, tp, round(rr, 2)
 ```
 
-`atr` é opcional (padrão 0.0 → sem buffer). Quando fornecido (H4 ATR de Wilder), o buffer
-`0.1×ATR` evita stops levados por ruído logo abaixo/acima da zona POI.
+Parâmetros:
+- `sl_ref`: nível de invalidação estrutural. No modo MSS: swing low (ALTA) ou swing high (BAIXA) da micro-estrutura M5. No modo DIRETO: poi_fundo (ALTA) ou poi_topo (BAIXA).
+- `tp_ref`: alvo estrutural opcional — `evento_nivel` (nível do ChoCH/BOS H4). Priorizado quando dá RR ≥ 1.5; caso contrário usa extensão mecânica 2× risco.
+- `atr`: H4 ATR de Wilder (padrão 0.0). Buffer `0.1×ATR` afasta o SL do swing/POI para absorver ruído imediato.
 
 ---
 
