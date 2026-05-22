@@ -154,6 +154,12 @@ def _detectar_e_registrar_setups(
 
     preco_atual = float(velas_m5.iloc[-1]["fechamento"])
     capturas = detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO, simbolo)
+    bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
+    em_sessao = verificar_sessao(datetime.now(timezone.utc))
+    zona_por_direcao: dict[str, bool] = {}
+    if velas_d1 is not None:
+        for _dir in ("ALTA", "BAIXA"):
+            zona_por_direcao[_dir] = verificar_zona_premium_discount_v2(velas_d1, preco_atual, _dir, PERIODO_SWING_D1)
 
     for pool in pools:
         captura = pool_varrido_por_sweep(pool, capturas)
@@ -188,13 +194,8 @@ def _detectar_e_registrar_setups(
             poi_fundo = poi_topo = evento.nivel_rompido
             tem_overlap = False
 
-        bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
         bias_alinhado = bias_d1 == evento.direcao
-        em_sessao = verificar_sessao(datetime.now(timezone.utc))
-        zona_ok = (
-            verificar_zona_premium_discount_v2(velas_d1, preco_atual, evento.direcao, PERIODO_SWING_D1)
-            if velas_d1 is not None else False
-        )
+        zona_ok = zona_por_direcao.get(evento.direcao, False)
 
         zona_virgem = (
             not any(o.testado for o in obs_val)
@@ -258,6 +259,12 @@ def _verificar_confirmacoes(
     atr = calcular_atr(velas_h4, ATR_PERIODO)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_SETUP_HORAS)
     setups = repo.carregar_setups_ativos(simbolo, cutoff)
+    bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
+    em_sessao = verificar_sessao(datetime.now(timezone.utc))
+    zona_por_direcao: dict[str, bool] = {}
+    if velas_d1 is not None:
+        for _dir in ("ALTA", "BAIXA"):
+            zona_por_direcao[_dir] = verificar_zona_premium_discount_v2(velas_d1, preco_atual, _dir, PERIODO_SWING_D1)
 
     for row in setups:
         (setup_id, _, direcao, pool_id, evento_tipo, evento_tempo_str,
@@ -291,12 +298,7 @@ def _verificar_confirmacoes(
                 rr=rr,
             )
 
-        bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
-        em_sessao = verificar_sessao(datetime.now(timezone.utc))
-        zona_ok = (
-            verificar_zona_premium_discount_v2(velas_d1, preco_atual, direcao, PERIODO_SWING_D1)
-            if velas_d1 is not None else False
-        )
+        zona_ok = zona_por_direcao.get(direcao, False)
 
         check_sessao = "✅ London/NY" if em_sessao else "⚠️ Fora de sessão"
         check_bias = (
