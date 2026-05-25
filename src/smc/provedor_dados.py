@@ -125,6 +125,29 @@ class ProvedorDados:
             return None
 
 
+    def buscar_historico_bulk(self, simbolo: str, timeframe: int, quantidade: int) -> int:
+        """Busca dados históricos em bulk do MT5 e persiste no banco.
+
+        Usa INSERT OR REPLACE — seguro para rodar múltiplas vezes sem duplicar.
+        Retorna o número de candles armazenados.
+        """
+        if not self._mt5_conectado:
+            logger.warning("MT5 não conectado.")
+            return 0
+        try:
+            import MetaTrader5 as mt5
+            registros = mt5.copy_rates_from_pos(simbolo, timeframe, 0, quantidade)
+            if registros is None or len(registros) < 2:
+                logger.warning("Sem dados históricos para %s TF=%d", simbolo, timeframe)
+                return 0
+            linhas = _converter_registros(simbolo, timeframe, registros, self._offset_servidor)
+            self._repo.persistir_velas(simbolo, timeframe, linhas)
+            return len(linhas)
+        except Exception as exc:
+            logger.error("Erro ao buscar histórico de %s TF=%d: %s", simbolo, timeframe, exc)
+            return 0
+
+
 def _converter_registros(simbolo: str, timeframe: int, registros, offset: int = 0) -> list[tuple]:
     linhas = []
     offset_broker = offset * 3600

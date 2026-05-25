@@ -58,13 +58,17 @@ def detectar_captura_liquidez(
     periodo_swing: int,
     limiar_pavio: float,
     simbolo: str = "",
+    janela_candles: int | None = 50,
 ) -> list[CapturaLiquidez]:
     capturas: list[CapturaLiquidez] = []
     swings_high, swings_low = calcular_swings(velas_h4, periodo_swing)
     swings_bearish_vistos: set[float] = set()
     swings_bullish_vistos: set[float] = set()
 
-    janela_inicio = max(periodo_swing, len(velas_h4) - 50 - 1)
+    if janela_candles is None:
+        janela_inicio = periodo_swing
+    else:
+        janela_inicio = max(periodo_swing, len(velas_h4) - janela_candles - 1)
     for i in range(janela_inicio, len(velas_h4)):
         vela = velas_h4.iloc[i]
         range_vela = vela["maxima"] - vela["minima"]
@@ -158,20 +162,25 @@ def _marcar_fvgs_mitigados(fvgs: list[FairValueGap], velas: pd.DataFrame) -> Non
     for fvg in fvgs:
         gap = fvg.preco_topo - fvg.preco_fundo
         meio_gap = fvg.preco_fundo + gap * 0.5
-        velas_pos = velas[velas["tempo"] > fvg.tempo]
-        for _, v in velas_pos.iterrows():
-            # Mitigado quando o FECHAMENTO atinge ao menos 50% do gap (wick não mitiga)
-            if fvg.direcao == "ALTA" and float(v["fechamento"]) <= meio_gap:
-                fvg.mitigado = True
-                break
-            if fvg.direcao == "BAIXA" and float(v["fechamento"]) >= meio_gap:
-                fvg.mitigado = True
-                break
-            # Testado quando wick entra na zona sem mitigar (zona usada mas ainda ativa)
-            if fvg.direcao == "ALTA" and float(v["minima"]) < fvg.preco_topo:
-                fvg.testado = True
-            elif fvg.direcao == "BAIXA" and float(v["maxima"]) > fvg.preco_fundo:
-                fvg.testado = True
+        post = velas[velas["tempo"] > fvg.tempo]
+        if post.empty:
+            continue
+        if fvg.direcao == "ALTA":
+            mit_mask = post["fechamento"] <= meio_gap
+            fvg.mitigado = bool(mit_mask.any())
+            if fvg.mitigado:
+                n = int(mit_mask.values.argmax())
+                fvg.testado = bool((post["minima"].values[:n] < fvg.preco_topo).any())
+            else:
+                fvg.testado = bool((post["minima"] < fvg.preco_topo).any())
+        else:
+            mit_mask = post["fechamento"] >= meio_gap
+            fvg.mitigado = bool(mit_mask.any())
+            if fvg.mitigado:
+                n = int(mit_mask.values.argmax())
+                fvg.testado = bool((post["maxima"].values[:n] > fvg.preco_fundo).any())
+            else:
+                fvg.testado = bool((post["maxima"] > fvg.preco_fundo).any())
 
 
 def _gerar_id(simbolo: str, vela: pd.Series) -> str:
@@ -553,18 +562,25 @@ def calcular_poi_composta(
 
 def _marcar_obs_v2_mitigados(obs: list[OrderBlockV2], velas: pd.DataFrame) -> None:
     for ob in obs:
-        for _, v in velas[velas["tempo"] > ob.tempo].iterrows():
-            if ob.direcao == "ALTA" and float(v["minima"]) <= ob.zona_50:
-                ob.mitigado = True
-                break
-            elif ob.direcao == "BAIXA" and float(v["maxima"]) >= ob.zona_50:
-                ob.mitigado = True
-                break
-            # Testado quando wick entra na zona sem atingir o zona_50 (mitigação)
-            if ob.direcao == "ALTA" and float(v["minima"]) <= ob.preco_topo:
-                ob.testado = True
-            elif ob.direcao == "BAIXA" and float(v["maxima"]) >= ob.preco_fundo:
-                ob.testado = True
+        post = velas[velas["tempo"] > ob.tempo]
+        if post.empty:
+            continue
+        if ob.direcao == "ALTA":
+            mit_mask = post["minima"] <= ob.zona_50
+            ob.mitigado = bool(mit_mask.any())
+            if ob.mitigado:
+                n = int(mit_mask.values.argmax())
+                ob.testado = bool((post["minima"].values[:n] <= ob.preco_topo).any())
+            else:
+                ob.testado = bool((post["minima"] <= ob.preco_topo).any())
+        else:
+            mit_mask = post["maxima"] >= ob.zona_50
+            ob.mitigado = bool(mit_mask.any())
+            if ob.mitigado:
+                n = int(mit_mask.values.argmax())
+                ob.testado = bool((post["maxima"].values[:n] >= ob.preco_fundo).any())
+            else:
+                ob.testado = bool((post["maxima"] >= ob.preco_fundo).any())
 
 
 # ---------------------------------------------------------------------------
