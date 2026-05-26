@@ -116,15 +116,37 @@ def _processar_simbolo(
 
 
 MENSAGEM_SETUP = (
-    "🔔 <b>SETUP SMC — {simbolo}</b> [{score}pts]\n"
-    "📊 Tipo: {evento_tipo} | Direção: {direcao}\n"
+    "🔔 <b>SETUP SMC — {simbolo}</b>  [{score}/100] {score_emoji}\n\n"
+    "📊 {evento_tipo} {direcao}  |  {pool_tipo} @ {pool_preco:.5f}\n"
     "🎯 POI: {poi_fundo:.5f} – {poi_topo:.5f}\n"
-    "💡 Pool: {pool_tipo} @ {pool_preco:.5f}\n"
-    "📈 Displacement: {displacement}\n"
-    "💰 SL: {sl:.5f} | TP: {tp:.5f} | R:R 1:{rr:.1f}\n"
-    "🔍 Sessão: {check_sessao} | Bias D1: {check_bias} | Zona: {check_zona}\n"
+    "📍 Entrada: {entrada:.5f}  |  SL: {sl:.5f} (-{sl_pips}p)  |  TP: {tp:.5f} (+{tp_pips}p)\n"
+    "📐 R:R 1:{rr:.1f}  |  Displacement: {displacement}\n\n"
+    "{check_sessao}\n"
+    "{checks_aviso}"
     "⏰ {timestamp}"
 )
+
+
+def _score_emoji(score: int) -> str:
+    if score >= 70:
+        return "🟢"
+    if score >= 55:
+        return "🟡"
+    return "🔴"
+
+
+def _pips(p1: float, p2: float, simbolo: str) -> int:
+    factor = 100 if "JPY" in simbolo else 10000
+    return round(abs(p1 - p2) * factor)
+
+
+def _checks_aviso(check_bias: str, check_zona: str) -> str:
+    avisos = []
+    if check_bias.startswith("⚠️"):
+        avisos.append(f"Bias D1: {check_bias.lstrip('⚠️').strip()}")
+    if check_zona.startswith("⚠️"):
+        avisos.append(f"Zona: {check_zona.lstrip('⚠️').strip()}")
+    return f"⚠️ {' | '.join(avisos)}\n\n" if avisos else ""
 
 
 def _detectar_e_registrar_setups(
@@ -235,6 +257,8 @@ def _detectar_e_registrar_setups(
             simbolo=simbolo,
             direcao=evento.direcao,
             pool_id=pool.id,
+            pool_tipo=pool.tipo,
+            pool_preco=pool.preco,
             evento_tipo=evento.tipo,
             evento_tempo=evento.tempo,
             evento_nivel=evento.nivel_rompido,
@@ -267,7 +291,8 @@ def _verificar_confirmacoes(
             zona_por_direcao[_dir] = verificar_zona_premium_discount_v2(velas_d1, preco_atual, _dir, PERIODO_SWING_D1)
 
     for row in setups:
-        (setup_id, _, direcao, pool_id, evento_tipo, evento_tempo_str,
+        (setup_id, _, direcao, pool_id, pool_tipo, pool_preco,
+         evento_tipo, evento_tempo_str,
          evento_nivel, leg_id, poi_fundo, poi_topo, score) = row
 
         if EXIGIR_CONFIRMACAO_LTF:
@@ -313,22 +338,26 @@ def _verificar_confirmacoes(
         )
         displacement = "✅ Sim" if leg_id else "—"
 
+        entrada = confirmacao.preco_confirmacao
         mensagem = MENSAGEM_SETUP.format(
             simbolo=simbolo,
             score=score,
+            score_emoji=_score_emoji(score),
             evento_tipo=evento_tipo,
             direcao=direcao,
             poi_fundo=poi_fundo,
             poi_topo=poi_topo,
-            pool_tipo=pool_id[:3],
-            pool_preco=poi_fundo,
-            displacement=displacement,
+            pool_tipo=pool_tipo,
+            pool_preco=pool_preco,
+            entrada=entrada,
             sl=confirmacao.sl,
+            sl_pips=_pips(entrada, confirmacao.sl, simbolo),
             tp=confirmacao.tp,
+            tp_pips=_pips(confirmacao.tp, entrada, simbolo),
             rr=confirmacao.rr,
+            displacement=displacement,
             check_sessao=check_sessao,
-            check_bias=check_bias,
-            check_zona=check_zona,
+            checks_aviso=_checks_aviso(check_bias, check_zona),
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         )
 

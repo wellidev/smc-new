@@ -1,140 +1,148 @@
 # Spec: principal.py
 
 ## Responsabilidade
-Orquestrar o loop de varredura contínua. Coordena todos os módulos, gerencia o banco de dados e a deduplicação de sinais.
+Orquestrar o loop de varredura contínua. Coordena todos os módulos no pipeline de dois estágios: detecção de setups (H4) e confirmação de entrada (M5).
 
 ## Fluxo por Ciclo
 
 ```
 para cada símbolo em ATIVOS_MONITORADOS:
-    1. obter velas H4 via ProvedorDados (estrutura SMC — TIMEFRAME_ESTRUTURAL)
-    2. obter velas M5 via ProvedorDados (preço atual do gatilho — TIMEFRAME_GATILHO)
-    3. obter velas D1 via ProvedorDados (bias macro + premium/discount) — não aborta se None
-    4. detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO)
-    5. detectar_quebra_estrutura(velas_h4, símbolo, PERIODO_SWING)
-    6. mapear_zonas_interesse(velas_h4, símbolo)  → (obs, fvgs)
-       ↳ internamente usa velas_h4[:-1] para marcação — a vela aberta é excluída
-         (ver spec_analisador_smc.md — "Mitigação direction-aware")
-    6a. registrar no SQLite capturas e BOS novos (via _registrar_novos_eventos)
-    6b. carregar todos os eventos ativos do SQLite dentro de IDADE_MAX_EVENTO_H4 × 4h
-    7. preco_atual = velas_m5.iloc[-1].fechamento
-    8. para cada captura × bos × ob × fvg:
-       verificar_confluencia(captura, bos, obs, fvgs, preco_atual)
-    9. se confluência detectada:
-       a. calcular filtros contextuais (sessao, bias D1, premium/discount)
-       b. calcular TP/SL com R:R 1:2
-       c. id_sinal = SHA1(simbolo + ob.id + fvg.id)
-       d. verificar no SQLite se id_sinal já existe
-       e. enviar alerta Telegram
+    1. _obter_dados_mercado → (velas_h4, velas_m5, velas_d1 | None)
+    2. _detectar_e_registrar_setups(velas_h4, velas_m5, velas_d1)
+    3. _verificar_confirmacoes(velas_h4, velas_m5, velas_d1)
 ```
 
+---
+
+## `_obter_dados_mercado(simbolo, provedor) -> tuple | None`
+
+- Busca H4 (TIMEFRAME_ESTRUTURAL, VELAS_HISTORICO velas; mínimo 20)
+- Busca M5 (TIMEFRAME_GATILHO, 50 velas; mínimo 1)
+- Busca D1 (TIMEFRAME_D1, VELAS_D1_HISTORICO velas; `None` não aborta)
+- Retorna `None` com `logger.warning` se H4 ou M5 insuficientes
+
+---
+
+## `_detectar_e_registrar_setups(simbolo, velas_h4, velas_m5, velas_d1, repo)`
+
+Pipeline sequencial com early-return em cada gate:
+
+| Gate | Condição de saída | Motivo |
+|------|------------------|--------|
+| ATR | `atr <= 0` | Dados insuficientes |
+| Eventos | `not eventos` | Nenhum ChoCH/BOS no H4 |
+| Pools | `not pools` | Nenhum EQH/EQL/PDH/PDL |
+| Sweep | `captura is None` | Pool não foi varrido |
+| Eventos pós-sweep | `not eventos_pos` | Sem reversão estrutural após captura |
+| Score | `score < SCORE_MINIMO_SETUP` | Qualidade insuficiente |
+| POI | `poi_fundo >= poi_topo` | POI degenerada |
+| Zona duplicada | `setup_ativo_na_zona(...)` | Setup já cobre essa região |
+| ID duplicado | `setup_ja_existe(setup_id)` | Deduplicação por setup |
+
+Fluxo detalhado:
+1. `calcular_atr(velas_h4, ATR_PERIODO)`
+2. `detectar_eventos_estrutura(velas_h4, simbolo, PERIODO_SWING_ESTRUTURA)` → lista de ChoCH/BOS
+3. `extrair_legs(velas_h4, eventos, simbolo, PERIODO_SWING_ESTRUTURA, atr)` → `leg_por_evento`
+4. `detectar_eqh_eql(velas_h4, simbolo, atr)` + `detectar_pdh_pdl(velas_d1, simbolo, atr)`
+5. `detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO, simbolo)` → capturas H4
+6. `calcular_bias_d1_v2`, `verificar_sessao`, `verificar_zona_premium_discount_v2`
+7. Para cada pool:
+   - `pool_varrido_por_sweep(pool, capturas)` → captura associada
+   - Filtra `eventos_pos`: eventos estruturais com `tempo > captura.tempo` e direção reversal
+   - Recupera `leg` associada ao evento mais recente
+   - Se `leg` existe: detecta OBs e FVGs na leg, marca mitigados, calcula POI composta
+   - Se `leg` não existe: POI = `evento.nivel_rompido`
+   - Calcula score e aplica todos os gates
+   - `repo.persistir_setup(...)` com `pool_tipo` e `pool_preco` do objeto pool
+
+---
+
+## `_verificar_confirmacoes(simbolo, velas_h4, velas_m5, velas_d1, preco_atual, repo, notificador)`
+
+Para cada setup ativo no banco (dentro de `IDADE_MAX_SETUP_HORAS`):
+
+### Com `EXIGIR_CONFIRMACAO_LTF=True` (padrão)
+- `detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo, cutoff=evento_tempo, atr=atr, tp_ref=evento_nivel)`
+- Se `None` → skip (sem MSS no M5 dentro da POI)
+
+### Com `EXIGIR_CONFIRMACAO_LTF=False`
+- Verifica se `poi_fundo <= preco_atual <= poi_topo`
+- `_calcular_risco_rr_v2(preco_atual, sl_ref, direcao, atr, tp_ref=evento_nivel)`
+- Cria `ConfirmacaoEntrada` com `tipo_confirmacao="DIRETO"`
+
+Após confirmação:
+1. Calcula `check_sessao`, `check_bias`, `check_zona` (informativos — não bloqueiam)
+2. Monta `MENSAGEM_SETUP` com todos os campos incluindo `pool_tipo` e `pool_preco`
+3. `repo.persistir_confirmacao(...)`
+4. `notificador.enviar_alerta(mensagem)` → se sucesso: `repo.desativar_setup(setup_id)`
+
+---
+
+## Template da Mensagem
+
+```
+🔔 <b>SETUP SMC — {simbolo}</b>  [{score}/100] {score_emoji}
+
+📊 {evento_tipo} {direcao}  |  {pool_tipo} @ {pool_preco:.5f}
+🎯 POI: {poi_fundo:.5f} – {poi_topo:.5f}
+📍 Entrada: {entrada:.5f}  |  SL: {sl:.5f} (-{sl_pips}p)  |  TP: {tp:.5f} (+{tp_pips}p)
+📐 R:R 1:{rr:.1f}  |  Displacement: {displacement}
+
+{check_sessao}
+{checks_aviso}⏰ {timestamp}
+```
+
+- `score_emoji`: 🟢 se score ≥ 70; 🟡 se ≥ 55; 🔴 se < 55
+- `sl_pips` / `tp_pips`: `round(abs(p1 - p2) * 10000)` — para JPY: `* 100`
+- `checks_aviso`: linha de avisos consolidada só se `check_bias` ou `check_zona` começar com `⚠️`
+- `displacement`: `"✅ Sim"` se `leg_id` presente; `"—"` caso contrário
+
+---
+
+## Funções Auxiliares
+
+### `_score_emoji(score: int) -> str`
+- `>= 70` → `"🟢"` | `>= 55` → `"🟡"` | `< 55` → `"🔴"`
+
+### `_pips(p1: float, p2: float, simbolo: str) -> int`
+- Factor: `100` se `"JPY"` no símbolo, `10000` caso contrário
+- Retorna `round(abs(p1 - p2) * factor)`
+
+### `_checks_aviso(check_bias: str, check_zona: str) -> str`
+- Retorna string consolidada de avisos se algum começar com `"⚠️"`
+- Formato: `"⚠️ Bias D1: X | Zona: Y\n\n"` ou `""`
+
+---
+
 ## Filtros Contextuais (informativos)
-Calculados após confluência confirmada; incluídos na mensagem, **não bloqueiam** o sinal:
+
+Calculados em ambas as funções. **Não bloqueiam** o setup nem a confirmação — apenas informam na mensagem.
 
 | Filtro | Função | Positivo | Negativo |
 |--------|--------|----------|----------|
-| Sessão | `verificar_sessao(captura.tempo)` | `✅ London/NY` | `⚠️ Fora de sessão` |
-| Bias D1 | `calcular_bias_d1(velas_d1, PERIODO_SWING_D1)` | `✅ Alinhado` | `⚠️ Contra D1` / `⚠️ Neutro` |
-| Zona | `verificar_zona_premium_discount(velas_d1, preco_atual, direcao)` | `✅ Desconto`/`✅ Premium` | `⚠️ Sem confluência` |
+| Sessão | `verificar_sessao(datetime.now(UTC))` | `✅ London/NY` | `⚠️ Fora de sessão` |
+| Bias D1 | `calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1)` | `✅ Alinhado` | `⚠️ Neutro` / `⚠️ Contra D1` |
+| Zona | `verificar_zona_premium_discount_v2(velas_d1, preco_atual, direcao, PERIODO_SWING_D1)` | `✅ Desconto`/`✅ Premium` | `⚠️ Sem confluência` |
 
-Se `velas_d1` for `None` (D1 indisponível): bias e zona mostram `⚠️` automaticamente.
+Se `velas_d1` for `None`: bias e zona mostram `⚠️` automaticamente.
 
-## Cálculo de TP/SL
-```python
-sl, tp, rr = calcular_risco_rr(preco_atual, ob, captura.direcao)
-# ALTA:  sl = ob.preco_fundo, risco = preco_atual - sl, tp = preco_atual + 2 * risco
-# BAIXA: sl = ob.preco_topo,  risco = sl - preco_atual, tp = preco_atual - 2 * risco
-```
-
-## Qualidade do BOS
-```python
-bos_qualidade = "Forte 💪" if bos.deslocamento else "Normal"
-```
-
-## Schema SQLite
-Ver `specs/spec_repositorio.md` — toda comunicação com o banco é feita via `Repositorio`.
-
-## Repositorio
-`principal.py` instancia `Repositorio(CAMINHO_BANCO)` e o injeta em `ProvedorDados`. Deduplicação de confirmações via `confirmacoes.id` (PRIMARY KEY + INSERT OR IGNORE) e `setups.ativo=0`.
+---
 
 ## Tratamento de Erros no Loop
 
 | Situação | Comportamento |
 |----------|---------------|
-| Falha de conexão MT5 | Log crítico, tentativa de reconexão, aguarda `INTERVALO * 2` |
+| Falha de conexão MT5 | Log crítico, retry via `_conectar_mt5_com_retry` (3×, intervalo 5s) |
 | Símbolo indisponível | Log warning, pula para próximo símbolo |
-| D1 indisponível | Log debug, filtros D1 mostram ⚠️ na mensagem, loop continua |
-| Falha no Telegram | Log error, sinal é persistido no SQLite mesmo assim |
+| D1 indisponível | Log debug, filtros D1 mostram `⚠️`, loop continua |
+| Falha no Telegram | Log error, setup mantido ativo (retry no próximo ciclo) |
 | Exceção não tratada no ciclo | Log exception com traceback, loop continua |
 
 ## Inicialização
+
 1. Carregar variáveis de ambiente via `dotenv`
-2. Configurar logging com formato: `%(asctime)s | %(levelname)s | %(name)s | %(message)s`
-3. Instanciar `Repositorio(CAMINHO_BANCO)`
-4. Instanciar `ProvedorDados(repo)`, `Notificador`
-5. Conectar MT5 (com retry de 3 tentativas espaçadas de 5s)
-6. Entrar no loop principal com `time.sleep(INTERVALO_VARREDURA_SEGUNDOS)` entre ciclos
-7. Ao encerrar (KeyboardInterrupt): desconectar MT5 e fechar SQLite
-
-## Logging
-- Nível: `INFO` por padrão (configurável via env `SMC_LOG_LEVEL`)
-- Um logger por módulo: `logging.getLogger(__name__)`
-- Logs de cada ciclo: símbolo processado, capturas encontradas, BOS detectados, sinais disparados
-
----
-
-## Decomposição de `_processar_simbolo`
-
-A função pública `_processar_simbolo` é um orquestrador de ~10 linhas. A lógica foi extraída
-para seis funções privadas coesas:
-
-### `Confluencia` (NamedTuple)
-```python
-class Confluencia(NamedTuple):
-    captura: CapturaLiquidez
-    bos: QuebraEstrutura
-    ob: OrderBlock
-    fvg: FairValueGap
-    overlap_fundo: float
-    overlap_topo: float
-```
-
-### `_obter_dados_mercado(simbolo, provedor) -> tuple[DataFrame, DataFrame, DataFrame | None] | None`
-- Busca H4 (≥ 20 velas), M5 (≥ 1 vela), D1 (opcional)
-- Retorna `None` com `logger.warning` se H4 ou M5 insuficientes
-- `velas_d1=None` não bloqueia — retorna a tripla mesmo assim
-
-### `_detectar_estrutura_h4(velas_h4, simbolo) -> tuple[list, list, list[OrderBlock], list[FairValueGap]]`
-- Chama os 4 detectores: `detectar_captura_liquidez`, `detectar_quebra_estrutura`, `mapear_zonas_interesse`
-- Retorna `(capturas, quebras, obs, fvgs)` sem efeitos colaterais
-
-### `_encontrar_confluencias(capturas, quebras, obs, fvgs, preco_atual) -> list[Confluencia]`
-- Função pura: itera o loop 4-aninhado (capturas × quebras × obs × fvgs)
-- Filtra por direção, temporalidade, sobreposição e preço na zona
-- Retorna lista de `Confluencia` (vazia se nenhuma válida)
-
-### `_calcular_contexto(conf, preco_atual, velas_d1) -> dict[str, Any]`
-- Calcula checks de sessão, bias D1, zona premium/discount, qualidade do BOS
-- Chama `calcular_risco_rr` para SL/TP/RR
-- Chaves retornadas: `check_sessao`, `check_bias`, `check_zona`, `bos_qualidade`, `sl`, `tp`, `rr`
-
-### `_construir_mensagem(simbolo, conf, ctx) -> str`
-- Pura: desestrutura `conf` e `ctx` para preencher `MENSAGEM_ALERTA.format(...)`
-- Adiciona `timestamp` com `datetime.now(timezone.utc)`
-
-### `_gerar_id_evento(simbolo, tipo, tempo, preco) -> str`
-- `SHA1(f"{simbolo}|{tipo}|{tempo.isoformat()}|{preco}")[:20]`
-- `tipo`: `"CAPTURA"` ou `"BOS"`
-
-### `_registrar_novos_eventos(capturas, quebras, repo, simbolo) -> None`
-- Para cada captura/quebra: gera id, chama `evento_ja_detectado`; se novo, chama `registrar_captura`/`registrar_bos`
-- Sem retorno — efeito colateral puro no banco
-
-### `_carregar_eventos_ativos(repo, simbolo, cutoff) -> tuple[list[CapturaLiquidez], list[QuebraEstrutura]]`
-- Chama `repo.carregar_capturas_ativas` e `repo.carregar_quebras_ativas`
-- Reconstrói os dataclasses a partir das tuplas retornadas pelo repositório
-- `cutoff = now - IDADE_MAX_EVENTO_H4 * 4h`
-
-### `_processar_confluencia(simbolo, conf, preco_atual, velas_d1, repo, notificador) -> None`
-- Gera `id_sinal` via SHA1, verifica dedup, chama `_calcular_contexto` + `_construir_mensagem`
-- Persiste o sinal e envia o alerta Telegram
+2. Configurar logging (nível via `SMC_LOG_LEVEL`; arquivo de debug em `logs/smc_debug.log` se DEBUG)
+3. Instanciar `Repositorio(CAMINHO_BANCO)`, `ProvedorDados`, `Notificador`
+4. `_conectar_mt5_com_retry` (3 tentativas, 5s entre elas)
+5. Loop: `_processar_simbolo` para cada ativo; `time.sleep(INTERVALO_VARREDURA_SEGUNDOS)` entre ciclos
+6. `KeyboardInterrupt`: desconectar MT5, fechar SQLite

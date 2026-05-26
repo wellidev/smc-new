@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS setups (
     simbolo         TEXT NOT NULL,
     direcao         TEXT NOT NULL,
     pool_id         TEXT NOT NULL,
+    pool_tipo       TEXT NOT NULL DEFAULT '',
+    pool_preco      REAL NOT NULL DEFAULT 0.0,
     evento_tipo     TEXT NOT NULL,
     evento_tempo    TEXT NOT NULL,
     evento_nivel    REAL NOT NULL,
@@ -59,6 +61,11 @@ CREATE TABLE IF NOT EXISTS setups (
     criado_em       TEXT NOT NULL
 );
 """
+
+_SQL_MIGRAR_SETUPS = [
+    "ALTER TABLE setups ADD COLUMN pool_tipo TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE setups ADD COLUMN pool_preco REAL NOT NULL DEFAULT 0.0",
+]
 
 _SQL_CRIAR_CONFIRMACOES = """
 CREATE TABLE IF NOT EXISTS confirmacoes (
@@ -83,12 +90,13 @@ LIMIT 1
 """
 _SQL_INSERIR_SETUP = """
 INSERT OR IGNORE INTO setups
-(id, simbolo, direcao, pool_id, evento_tipo, evento_tempo, evento_nivel,
+(id, simbolo, direcao, pool_id, pool_tipo, pool_preco, evento_tipo, evento_tempo, evento_nivel,
  leg_id, poi_fundo, poi_topo, score, ativo, criado_em)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
 """
 _SQL_SETUPS_ATIVOS = """
-SELECT id, simbolo, direcao, pool_id, evento_tipo, evento_tempo, evento_nivel,
+SELECT id, simbolo, direcao, pool_id, pool_tipo, pool_preco,
+       evento_tipo, evento_tempo, evento_nivel,
        leg_id, poi_fundo, poi_topo, score
 FROM setups
 WHERE simbolo = ? AND ativo = 1 AND criado_em >= ?
@@ -114,6 +122,11 @@ class Repositorio:
         self._conn.execute(_SQL_CRIAR_INDICE_VELAS)
         self._conn.execute(_SQL_CRIAR_SETUPS)
         self._conn.execute(_SQL_CRIAR_CONFIRMACOES)
+        for _sql in _SQL_MIGRAR_SETUPS:
+            try:
+                self._conn.execute(_sql)
+            except sqlite3.OperationalError:
+                pass  # coluna já existe
         self._conn.commit()
 
     def fechar(self) -> None:
@@ -163,6 +176,8 @@ class Repositorio:
         simbolo: str,
         direcao: str,
         pool_id: str,
+        pool_tipo: str,
+        pool_preco: float,
         evento_tipo: str,
         evento_tempo: datetime,
         evento_nivel: float,
@@ -173,8 +188,8 @@ class Repositorio:
     ) -> None:
         agora = datetime.now(timezone.utc).isoformat()
         self._conn.execute(_SQL_INSERIR_SETUP, (
-            id_setup, simbolo, direcao, pool_id, evento_tipo,
-            evento_tempo.isoformat(), evento_nivel, leg_id,
+            id_setup, simbolo, direcao, pool_id, pool_tipo, pool_preco,
+            evento_tipo, evento_tempo.isoformat(), evento_nivel, leg_id,
             poi_fundo, poi_topo, score, agora,
         ))
         self._conn.commit()
