@@ -411,7 +411,7 @@ def main() -> None:
     try:
         while True:
             _ciclo += 1
-            logger.info("--- Início do ciclo de varredura ---")
+            logger.debug("--- Início do ciclo de varredura ---")
             for simbolo in ATIVOS_MONITORADOS:
                 try:
                     _processar_simbolo(simbolo, provedor, notificador, repo)
@@ -424,7 +424,7 @@ def main() -> None:
                 if removidos:
                     logger.info("Housekeeping: %d setups antigos removidos.", removidos)
 
-            logger.info("--- Ciclo concluído. Aguardando %ds ---", INTERVALO_VARREDURA_SEGUNDOS)
+            logger.debug("--- Ciclo concluído. Aguardando %ds ---", INTERVALO_VARREDURA_SEGUNDOS)
             time.sleep(INTERVALO_VARREDURA_SEGUNDOS)
 
     except KeyboardInterrupt:
