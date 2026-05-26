@@ -124,8 +124,8 @@ o preço forma micro-estrutura interna e a primeira vela que fecha além do
 1. (Opcional) Se cutoff for fornecido, descartar velas com tempo <= cutoff.
 2. Filtrar velas_m5 cujo intervalo [minima, maxima] cruza a POI
    (maxima >= poi_fundo AND minima <= poi_topo) → velas_poi.
-3. Se len(velas_poi) < 5: return None  (mínimo para calcular_swings com periodo=2).
-4. swings_high, swings_low = calcular_swings(velas_poi, periodo=2).
+3. Se len(velas_poi) < 3: return None  (mínimo para calcular_swings com periodo=1).
+4. swings_high, swings_low = calcular_swings(velas_poi, periodo=1).
 5. Para direcao="ALTA" (setup de compra):
    a. Para cada sl_idx em sorted(swings_low):
       - Selecionar o PRIMEIRO swing HIGH com idx > sl_idx → (sh_idx, sh_price).
@@ -146,9 +146,10 @@ o preço forma micro-estrutura interna e a primeira vela que fecha além do
 8. Se nada encontrado: return None.
 ```
 
-**Requisitos mínimos:** 5 candles dentro da POI (necessário para que
-`calcular_swings(..., periodo=2)` consiga identificar pelo menos um par
-swing_low → swing_high → vela de confirmação).
+**Requisitos mínimos:** 3 candles dentro da POI (necessário para que
+`calcular_swings(..., periodo=1)` consiga identificar pelo menos um swing).
+Na prática, a sequência completa LOW→HIGH→confirmação exige ~6 candles para
+produzir resultado, mas o guard `< 3` serve apenas de fast-path.
 
 ---
 
@@ -158,7 +159,8 @@ Score composicional 0–100:
 
 | Condição | Pontos |
 |----------|--------|
-| `evento.tipo == "ChoCH"` (vs BOS) | +20 |
+| `evento.tipo == "ChoCH"` | +20 |
+| `evento.tipo == "BOS"` | +10 |
 | D1 alinhado com a direção | +15 |
 | `leg is not None and leg.eh_displacement` | +15 |
 | Pool do tipo "PDH" ou "PDL" (D1 institucional) | +15 |
@@ -167,7 +169,8 @@ Score composicional 0–100:
 | Sessão London/NY no momento do evento | +10 |
 | Zona premium/discount (D1 range) alinhada | +10 |
 | Zona virgem: nenhum OB/FVG da POI foi testado antes | +5 |
-| Total máximo | 100 |
+| Total máximo (ChoCH) | 100 |
+| Total máximo (BOS) | 90 |
 
 `SCORE_MINIMO_SETUP = 40` em `configuracoes.py` — setups abaixo disso são descartados silenciosamente.
 

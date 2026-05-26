@@ -404,7 +404,7 @@ def extrair_legs(
         fvgs_int = extrair_fvgs_no_intervalo(velas, i0, i1, simbolo)
         tem_fvg = len(fvgs_int) > 0
         atr_multiplo = range_pontos / atr if atr > 0 else 0.0
-        eh_displacement = atr_multiplo >= 2.0 and proporcao_corpo >= 0.60 and tem_fvg
+        eh_displacement = atr_multiplo >= 1.5 and proporcao_corpo >= 0.50 and tem_fvg
 
         leg_id = gerar_id_leg(simbolo, starting.tempo, ending.tempo)
         legs.append(LegImpulso(
@@ -707,10 +707,10 @@ def detectar_mss_no_poi(
         (df["maxima"] >= poi_fundo) & (df["minima"] <= poi_topo)
     ].reset_index(drop=True)
 
-    if len(velas_poi) < 5:
+    if len(velas_poi) < 3:
         return None
 
-    swings_high, swings_low = calcular_swings(velas_poi, periodo=2)
+    swings_high, swings_low = calcular_swings(velas_poi, periodo=1)
 
     if direcao == "ALTA":
         # Para cada swing LOW em ordem cronológica, procurar o primeiro swing
@@ -787,6 +787,8 @@ def calcular_score_setup(
     score = 0
     if evento.tipo == "ChoCH":
         score += 20
+    elif evento.tipo == "BOS":
+        score += 10
     if bias_alinhado:
         score += 15
     if leg is not None and leg.eh_displacement:

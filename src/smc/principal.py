@@ -235,7 +235,7 @@ def _detectar_e_registrar_setups(
         )
 
         if score < SCORE_MINIMO_SETUP:
-            logger.debug("Setup %s ignorado: score=%d < %d", simbolo, score, SCORE_MINIMO_SETUP)
+            logger.debug("Setup %s ignorado: id=%s score=%d < %d", simbolo, score, SCORE_MINIMO_SETUP)
             continue
 
         if poi_fundo >= poi_topo:
@@ -267,8 +267,8 @@ def _detectar_e_registrar_setups(
             poi_topo=poi_topo,
             score=score,
         )
-        logger.info("Setup SMC registrado: %s %s score=%d POI=[%.5f-%.5f]",
-                    simbolo, evento.direcao, score, poi_fundo, poi_topo)
+        logger.debug("Setup %s id=%s registrado: %s score=%d POI=[%.5f-%.5f]",
+                    simbolo, setup_id, evento.direcao, score, poi_fundo, poi_topo)
 
 
 def _verificar_confirmacoes(
@@ -300,6 +300,10 @@ def _verificar_confirmacoes(
             confirmacao = detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo,
                                               cutoff=evento_tempo, atr=atr, tp_ref=evento_nivel)
             if confirmacao is None:
+                logger.debug(
+                    "Setup %s id=%s aguardando: MSS no M5 (POI=[%.5f–%.5f] dir=%s)",
+                    simbolo, setup_id, poi_fundo, poi_topo, direcao,
+                )
                 continue
             confirmacao.setup_id = setup_id
             confirmacao.id = gerar_id_confirmacao(simbolo, setup_id, confirmacao.tempo)
@@ -309,7 +313,7 @@ def _verificar_confirmacoes(
             sl_ref = poi_fundo if direcao == "ALTA" else poi_topo
             rr_result = _calcular_risco_rr_v2(preco_atual, sl_ref, direcao, atr, tp_ref=evento_nivel)
             if rr_result is None:
-                logger.debug("Setup %s ignorado: risco nulo (poi degenerado)", simbolo)
+                logger.debug("Setup %s id=%s ignorado: risco nulo (poi degenerado)", setup_id, simbolo)
                 continue
             sl, tp, rr = rr_result
             confirmacao = ConfirmacaoEntrada(

@@ -187,15 +187,15 @@ class TestCalcularScoreSetup:
         ev = _evento("BOS", "ALTA")
         pool = _pool("PDH")
         score = calcular_score_setup(ev, None, pool)
-        assert score == 15  # BOS(0) + PDH(+15), sem outros critérios
+        assert score == 25  # BOS(10) + PDH(+15), sem outros critérios
 
-    def test_choch_adiciona_20(self):
+    def test_choch_adiciona_mais_que_bos(self):
         ev_choch = _evento("ChoCH", "ALTA")
         ev_bos = _evento("BOS", "ALTA")
         pool = _pool("PDH")
         s1 = calcular_score_setup(ev_choch, None, pool)
         s2 = calcular_score_setup(ev_bos, None, pool)
-        assert s1 - s2 == 20
+        assert s1 - s2 == 10  # ChoCH(20) - BOS(10) = 10
 
     def test_displacement_adiciona_15(self):
         ev = _evento("BOS", "ALTA")
@@ -212,8 +212,8 @@ class TestCalcularScoreSetup:
         pool_pdh = _pool("PDH")
         s_eqh = calcular_score_setup(ev, None, pool_eqh)
         s_pdh = calcular_score_setup(ev, None, pool_pdh)
-        assert s_eqh == 10
-        assert s_pdh == 15
+        assert s_eqh == 20  # BOS(10) + EQH(10)
+        assert s_pdh == 25  # BOS(10) + PDH(15)
         assert s_pdh - s_eqh == 5  # PDH institucional pondera mais
 
     def test_zona_virgem_adiciona_5(self):

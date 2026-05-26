@@ -9,12 +9,12 @@ Centralizar todos os parâmetros de configuração. Não contém lógica de neg�
 |-----------|------|--------------|-----------|
 | `ATIVOS_MONITORADOS` | `list[str]` | Ver abaixo | Símbolos do MT5 |
 | `TIMEFRAME_ESTRUTURAL` | `int` | `mt5.TIMEFRAME_H4` | Timeframe de análise estrutural |
-| `TIMEFRAME_GATILHO` | `int` | `mt5.TIMEFRAME_M15` | Timeframe de refinamento do gatilho |
+| `TIMEFRAME_GATILHO` | `int` | `mt5.TIMEFRAME_M5` | Timeframe de confirmação LTF (MSS dentro da POI) |
 | `TIMEFRAME_D1` | `int` | `mt5.TIMEFRAME_D1` (fallback `16408`) | Timeframe diário para bias macro e premium/discount |
 | `VELAS_HISTORICO` | `int` | `500` | Janela de candles H4 carregados por símbolo |
 | `VELAS_D1_HISTORICO` | `int` | `50` | Janela de candles D1 para bias e premium/discount |
-| `PERIODO_SWING` | `int` | `10` | N candles em cada lado para swing H4 (captura de liquidez) |
-| `PERIODO_SWING_ESTRUTURA` | `int` | `5` | N candles em cada lado para ChoCH/BOS — janela menor reduz latência de ~40h para ~20h |
+| `PERIODO_SWING` | `int` | `5` | N candles em cada lado para swing H4 (captura de liquidez) — alinhado com PERIODO_SWING_ESTRUTURA para evitar assimetria |
+| `PERIODO_SWING_ESTRUTURA` | `int` | `5` | N candles em cada lado para ChoCH/BOS |
 | `PERIODO_SWING_D1` | `int` | `5` | N candles em cada lado para swing D1 (janela menor) |
 | `LIMIAR_PAVIO` | `float` | `0.30` | 30% do range total para validar captura de liquidez |
 | `SESSAO_LONDON_INICIO` | `int` | `8` | Hora UTC de início da sessão London |
@@ -42,7 +42,7 @@ Centralizar todos os parâmetros de configuração. Não contém lógica de neg�
 ## Template de Mensagem
 ```
 🚨 <b>SINAL SMC — {simbolo}</b>
-📊 Timeframe: H4 (zona) + M15 (gatilho)
+📊 Timeframe: H4 (zona) + M5 (gatilho)
 📍 Captura de Liquidez: {direcao_captura} @ {preco_varredura:.5f}
 🔨 BOS ({bos_qualidade}): {direcao_bos} @ {nivel_bos:.5f}
 🟦 Order Block ({ob_qualidade}): {ob_fundo:.5f} – {ob_topo:.5f}

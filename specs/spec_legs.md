@@ -33,7 +33,7 @@ Para cada evento em eventos (ordenado por tempo):
        fvgs_internos = extrair_fvgs_no_intervalo(velas, inicio, fim, simbolo)
        tem_fvg_interno = len(fvgs_internos) > 0
        atr_multiplo = range_pontos / atr (0.0 se atr == 0)
-       eh_displacement = (atr_multiplo >= 2.0 AND corpo_direcional >= 0.60 AND tem_fvg_interno)
+       eh_displacement = (atr_multiplo >= 1.5 AND corpo_direcional >= 0.50 AND tem_fvg_interno)
 ```
 
 **Direção da leg:**
