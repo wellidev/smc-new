@@ -235,7 +235,7 @@ def _detectar_e_registrar_setups(
         )
 
         if score < SCORE_MINIMO_SETUP:
-            logger.debug("Setup %s ignorado: id=%s score=%d < %d", simbolo, score, SCORE_MINIMO_SETUP)
+            logger.debug("Setup %s ignorado: score=%d < %d", simbolo, score, SCORE_MINIMO_SETUP)
             continue
 
         if poi_fundo >= poi_topo:
@@ -313,7 +313,7 @@ def _verificar_confirmacoes(
             sl_ref = poi_fundo if direcao == "ALTA" else poi_topo
             rr_result = _calcular_risco_rr_v2(preco_atual, sl_ref, direcao, atr, tp_ref=evento_nivel)
             if rr_result is None:
-                logger.debug("Setup %s id=%s ignorado: risco nulo (poi degenerado)", setup_id, simbolo)
+                logger.debug("Setup %s id=%s ignorado: risco nulo (poi degenerado)", simbolo, setup_id)
                 continue
             sl, tp, rr = rr_result
             confirmacao = ConfirmacaoEntrada(
