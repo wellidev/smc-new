@@ -39,12 +39,13 @@ from smc.configuracoes import (
     SCORE_MINIMO_SETUP,
     TELEGRAM_CHAT_ID,
     TELEGRAM_TOKEN,
-    TIMEFRAME_D1,
+    TIMEFRAME_CONTEXTO_MACRO,
     TIMEFRAME_ESTRUTURAL,
     TIMEFRAME_GATILHO,
     TIMEFRAME_GATILHO_MINUTOS,
-    VELAS_D1_HISTORICO,
-    VELAS_HISTORICO,
+    VELAS_TIMEFRAME_CONTEXTO_MACRO,
+    VELAS_TIMEFRAME_ESTRUTURAL,
+    VELAS_TIMEFRAME_GATILHO,
 )
 from smc.modelos import (
     ConfirmacaoEntrada,
@@ -86,17 +87,17 @@ logger = logging.getLogger(__name__)
 def _obter_dados_mercado(
         simbolo: str, provedor: ProvedorDados
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame | None] | None:
-    velas_h4 = provedor.obter_velas(simbolo, TIMEFRAME_ESTRUTURAL, VELAS_HISTORICO)
+    velas_h4 = provedor.obter_velas(simbolo, TIMEFRAME_ESTRUTURAL, VELAS_TIMEFRAME_ESTRUTURAL)
     if velas_h4 is None or len(velas_h4) < 20:
         logger.warning("Dados insuficientes para %s no H4.", simbolo)
         return None
 
-    velas_m5 = provedor.obter_velas(simbolo, TIMEFRAME_GATILHO, 50)
+    velas_m5 = provedor.obter_velas(simbolo, TIMEFRAME_GATILHO, VELAS_TIMEFRAME_GATILHO)
     if velas_m5 is None or len(velas_m5) == 0:
         logger.warning("Dados insuficientes para %s no M5.", simbolo)
         return None
 
-    velas_d1 = provedor.obter_velas(simbolo, TIMEFRAME_D1, VELAS_D1_HISTORICO)
+    velas_d1 = provedor.obter_velas(simbolo, TIMEFRAME_CONTEXTO_MACRO, VELAS_TIMEFRAME_CONTEXTO_MACRO)
     if velas_d1 is None:
         logger.debug("D1 indisponível para %s — filtros contextuais desativados.", simbolo)
 

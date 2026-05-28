@@ -24,7 +24,7 @@ Telegram alert
 
 ## D1 — Contexto macro
 
-Constante: `TIMEFRAME_D1` | Janela: `VELAS_D1_HISTORICO = 50` | Swing: `PERIODO_SWING_D1 = 5`
+Constante: `TIMEFRAME_CONTEXTO_MACRO` | Janela: `VELAS_TIMEFRAME_CONTEXTO_MACRO = 50` | Swing: `PERIODO_SWING_D1 = 5`
 
 Usado em `_detectar_e_registrar_setups` e `_verificar_confirmacoes` via `velas_d1`.
 
@@ -40,7 +40,7 @@ D1 não dispara nada por conta própria — **pondera o score** e pode bloquear 
 
 ## H4 — Detecção de setup (Estágio 1 inteiro)
 
-Constante: `TIMEFRAME_ESTRUTURAL` | Janela: `VELAS_HISTORICO = 500` | Swing: `PERIODO_SWING = 5`
+Constante: `TIMEFRAME_ESTRUTURAL` | Janela: `VELAS_TIMEFRAME_ESTRUTURAL = 500` | Swing: `PERIODO_SWING = 5`
 
 É o timeframe de trabalho principal. Tudo que constrói o `SetupSMC` roda aqui:
 

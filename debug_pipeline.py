@@ -14,9 +14,8 @@ from smc.analisador_smc import calcular_atr
 from smc.configuracoes import (
     ATR_PERIODO,
     CAMINHO_BANCO,
-    MT5_LOGIN, MT5_PASSWORD, MT5_PATH, MT5_SERVER,
-    TIMEFRAME_D1, TIMEFRAME_ESTRUTURAL, TIMEFRAME_GATILHO,
-    VELAS_D1_HISTORICO, VELAS_HISTORICO,
+    TIMEFRAME_CONTEXTO_MACRO, TIMEFRAME_ESTRUTURAL, TIMEFRAME_GATILHO,
+    VELAS_TIMEFRAME_CONTEXTO_MACRO, VELAS_TIMEFRAME_ESTRUTURAL,
 )
 from smc.diagnostico import auditar_pipeline, auditar_setups_ativos
 from smc.provedor_dados import ProvedorDados
@@ -25,7 +24,7 @@ from smc.repositorio import Repositorio
 
 def _conectar(provedor: ProvedorDados) -> bool:
     for tentativa in range(1, 4):
-        if provedor.conectar(MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH):
+        if provedor.conectar():
             return True
         print(f"  tentativa {tentativa}/3 falhou, aguardando...")
         time.sleep(2)
@@ -37,7 +36,7 @@ def main() -> None:
 
     repo = Repositorio(CAMINHO_BANCO)
 
-    provedor = ProvedorDados()
+    provedor = ProvedorDados(repo)
     print("Conectando ao MT5...")
     if not _conectar(provedor):
         print("Falha ao conectar ao MT5. Verifique .env e se o MT5 esta aberto.")
@@ -45,9 +44,9 @@ def main() -> None:
     print("Conectado\n")
 
     for simbolo in simbolos:
-        velas_h4 = provedor.obter_velas(simbolo, TIMEFRAME_ESTRUTURAL, VELAS_HISTORICO)
+        velas_d1 = provedor.obter_velas(simbolo, TIMEFRAME_CONTEXTO_MACRO, VELAS_TIMEFRAME_CONTEXTO_MACRO)
+        velas_h4 = provedor.obter_velas(simbolo, TIMEFRAME_ESTRUTURAL, VELAS_TIMEFRAME_ESTRUTURAL)
         velas_m5 = provedor.obter_velas(simbolo, TIMEFRAME_GATILHO, 200)
-        velas_d1 = provedor.obter_velas(simbolo, TIMEFRAME_D1, VELAS_D1_HISTORICO)
 
         if velas_h4 is None or len(velas_h4) < 20:
             print(f"[{simbolo}] Dados H4 insuficientes - pulando")

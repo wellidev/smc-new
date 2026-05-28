@@ -25,11 +25,13 @@ ATIVOS_MONITORADOS: list[str] = [
     "BTCUSD", "ETHUSD", "LINKUSD", "LTCUSD", "SOLUSD", "XRPUSD",  # Crypto
 ]
 
+TIMEFRAME_CONTEXTO_MACRO: int = TIMEFRAME_D1
 TIMEFRAME_ESTRUTURAL: int = TIMEFRAME_H4
 TIMEFRAME_GATILHO: int = TIMEFRAME_M5
 
-VELAS_HISTORICO: int = 120  # ~3–4 sessões semanais; reduzido para evitar Over-Mapping no Day Trading M5
-VELAS_D1_HISTORICO: int = 50
+VELAS_TIMEFRAME_ESTRUTURAL: int = 120  # ~3–4 sessões semanais; reduzido para evitar Over-Mapping no Day Trading M5
+VELAS_TIMEFRAME_CONTEXTO_MACRO: int = 50
+VELAS_TIMEFRAME_GATILHO: int = 50
 PERIODO_SWING: int = 5
 PERIODO_SWING_ESTRUTURA: int = 5
 PERIODO_SWING_D1: int = 5

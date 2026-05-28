@@ -12,7 +12,7 @@ import sys
 from smc.configuracoes import (
     ATIVOS_MONITORADOS,
     CAMINHO_BANCO,
-    TIMEFRAME_D1,
+    TIMEFRAME_CONTEXTO_MACRO,
     TIMEFRAME_ESTRUTURAL,
     TIMEFRAME_GATILHO,
 )
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 _NOMES_TF = {
     TIMEFRAME_GATILHO: "M5",
     TIMEFRAME_ESTRUTURAL: "H4",
-    TIMEFRAME_D1: "D1",
+    TIMEFRAME_CONTEXTO_MACRO: "D1",
 }
 
 
@@ -44,7 +44,7 @@ def main() -> None:
     quantidades = {
         TIMEFRAME_GATILHO: args.m5,
         TIMEFRAME_ESTRUTURAL: args.h4,
-        TIMEFRAME_D1: args.d1,
+        TIMEFRAME_CONTEXTO_MACRO: args.d1,
     }
 
     simbolos = args.simbolos or ATIVOS_MONITORADOS

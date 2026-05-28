@@ -11,8 +11,8 @@ Centralizar todos os parâmetros de configuração. Não contém lógica de neg�
 | `TIMEFRAME_ESTRUTURAL` | `int` | `mt5.TIMEFRAME_H4` | Timeframe de análise estrutural |
 | `TIMEFRAME_GATILHO` | `int` | `mt5.TIMEFRAME_M5` | Timeframe de confirmação LTF (MSS dentro da POI) |
 | `TIMEFRAME_D1` | `int` | `mt5.TIMEFRAME_D1` (fallback `16408`) | Timeframe diário para bias macro e premium/discount |
-| `VELAS_HISTORICO` | `int` | `120` | Janela de candles H4 carregados por símbolo — ~3–4 sessões semanais; reduzido para evitar Over-Mapping (POIs obsoletas) no Day Trading M5 |
-| `VELAS_D1_HISTORICO` | `int` | `50` | Janela de candles D1 para bias e premium/discount |
+| `VELAS_TIMEFRAME_ESTRUTURAL` | `int` | `120` | Janela de candles H4 carregados por símbolo — ~3–4 sessões semanais; reduzido para evitar Over-Mapping (POIs obsoletas) no Day Trading M5 |
+| `VELAS_TIMEFRAME_CONTEXTO_MACRO` | `int` | `50` | Janela de candles D1 para bias e premium/discount |
 | `PERIODO_SWING` | `int` | `5` | N candles em cada lado para swing H4 (captura de liquidez) — alinhado com PERIODO_SWING_ESTRUTURA para evitar assimetria |
 | `PERIODO_SWING_ESTRUTURA` | `int` | `5` | N candles em cada lado para ChoCH/BOS |
 | `PERIODO_SWING_D1` | `int` | `5` | N candles em cada lado para swing D1 (janela menor) |

@@ -1,7 +1,7 @@
 """Engine de backtesting walk-forward com janela deslizante.
 
 Replica exatamente o comportamento do sistema ao vivo:
-- Janela deslizante de VELAS_HISTORICO candles H4 (padrão: 500)
+- Janela deslizante de VELAS_TIMEFRAME_ESTRUTURAL candles H4 (padrão: 500)
 - Passo de 6 candles H4 (≈ 24h) para cobrir todo o histórico
 - `velas_h4.iloc[:-1]` como referência de mitigação (excluindo candle aberta)
 - Confirmação MSS buscada no M5 dentro de IDADE_MAX_SETUP_HORAS
@@ -49,11 +49,11 @@ from smc.configuracoes import (
     PERIODO_SWING,
     PERIODO_SWING_D1,
     PERIODO_SWING_ESTRUTURA,
-    TIMEFRAME_D1,
+    TIMEFRAME_CONTEXTO_MACRO,
     TIMEFRAME_ESTRUTURAL,
     TIMEFRAME_GATILHO,
-    VELAS_D1_HISTORICO,
-    VELAS_HISTORICO,
+    VELAS_TIMEFRAME_CONTEXTO_MACRO,
+    VELAS_TIMEFRAME_ESTRUTURAL,
 )
 from smc.filtros import calcular_bias_d1_v2, verificar_sessao, verificar_zona_premium_discount_v2
 from smc.modelos import gerar_id_setup
@@ -319,9 +319,9 @@ def _rodar_simbolo(
 ) -> list[dict[str, Any]]:
     velas_h4_full = _carregar_velas(conn, simbolo, TIMEFRAME_ESTRUTURAL)
     velas_m5_full = _carregar_velas(conn, simbolo, TIMEFRAME_GATILHO)
-    velas_d1_full = _carregar_velas(conn, simbolo, TIMEFRAME_D1)
+    velas_d1_full = _carregar_velas(conn, simbolo, TIMEFRAME_CONTEXTO_MACRO)
 
-    if velas_h4_full is None or len(velas_h4_full) < VELAS_HISTORICO + _STEP_H4:
+    if velas_h4_full is None or len(velas_h4_full) < VELAS_TIMEFRAME_ESTRUTURAL + _STEP_H4:
         logger.warning("%s: H4 insuficiente (%d candles), pulando.",
                        simbolo, len(velas_h4_full) if velas_h4_full is not None else 0)
         return []
@@ -332,12 +332,12 @@ def _rodar_simbolo(
 
     # Alinha o início do walk-forward com o início dos dados M5, para garantir
     # que o evento_tempo tenha M5 disponível para confirmação e avaliação.
-    i_inicio = VELAS_HISTORICO
+    i_inicio = VELAS_TIMEFRAME_ESTRUTURAL
     if velas_m5_full is not None and len(velas_m5_full) > 0:
         ts_m5_inicio = velas_m5_full.iloc[0]["tempo"]
         mask = velas_h4_full["tempo"] >= ts_m5_inicio
         if mask.any():
-            i_inicio = max(VELAS_HISTORICO, int(mask.idxmax()))
+            i_inicio = max(VELAS_TIMEFRAME_ESTRUTURAL, int(mask.idxmax()))
         logger.debug(
             "%s: M5 inicia em %s — walk-forward começa no índice H4 %d/%d",
             simbolo, ts_m5_inicio.strftime("%Y-%m-%d"), i_inicio, n,
@@ -345,14 +345,14 @@ def _rodar_simbolo(
 
     # Walk-forward: janela deslizante, passo de 6 candles (≈ 24h)
     for i in range(i_inicio, n, _STEP_H4):
-        janela_h4 = velas_h4_full.iloc[i - VELAS_HISTORICO: i].reset_index(drop=True)
+        janela_h4 = velas_h4_full.iloc[i - VELAS_TIMEFRAME_ESTRUTURAL: i].reset_index(drop=True)
         ts_fim = janela_h4.iloc[-1]["tempo"]
 
         janela_d1 = None
         if velas_d1_full is not None:
             janela_d1 = (
                 velas_d1_full[velas_d1_full["tempo"] <= ts_fim]
-                .tail(VELAS_D1_HISTORICO)
+                .tail(VELAS_TIMEFRAME_CONTEXTO_MACRO)
                 .reset_index(drop=True)
             )
             if len(janela_d1) == 0:

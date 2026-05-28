@@ -16,9 +16,9 @@ para cada símbolo em ATIVOS_MONITORADOS:
 
 ## `_obter_dados_mercado(simbolo, provedor) -> tuple | None`
 
-- Busca H4 (TIMEFRAME_ESTRUTURAL, VELAS_HISTORICO velas; mínimo 20)
+- Busca H4 (TIMEFRAME_ESTRUTURAL, VELAS_TIMEFRAME_ESTRUTURAL velas; mínimo 20)
 - Busca M5 (TIMEFRAME_GATILHO, 50 velas; mínimo 1)
-- Busca D1 (TIMEFRAME_D1, VELAS_D1_HISTORICO velas; `None` não aborta)
+- Busca D1 (TIMEFRAME_CONTEXTO_MACRO, VELAS_TIMEFRAME_CONTEXTO_MACRO velas; `None` não aborta)
 - Retorna `None` com `logger.warning` se H4 ou M5 insuficientes
 
 ---
