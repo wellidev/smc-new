@@ -84,7 +84,7 @@ Sequência exigida dentro da POI (mínimo 3 candles; na prática ~6):
 Produz:
 - `preco_confirmacao`: fechamento da vela de confirmação
 - `sl_ref`: swing estrutural M5 (ponto de invalidação da tese)
-- `tp`: prefere `evento_nivel` H4 se RR ≥ 1.5; senão fallback 2×risco
+- `tp`: usa `evento_nivel` H4 se RR ≥ 1.5; se RR < 1.5 descarta o setup (barreira H4 próxima demais); sem `tp_ref` usa extensão mecânica 2×risco
 
 ---
 
@@ -99,9 +99,3 @@ Não é timeframe de candle — é `datetime.now(timezone.utc)` no momento do de
 | Fora de sessão | — | +0 pts |
 
 Função: `verificar_sessao(tempo)` em `filtros.py`. O `tempo` deve ser o momento atual — não o timestamp do evento histórico.
-
----
-
-## Constante legada removida
-
-`TIMEFRAME_M15` foi removida de `configuracoes.py` — não era importada por nenhum módulo. `TIMEFRAME_GATILHO = TIMEFRAME_M5` é a única referência ao timeframe de confirmação.

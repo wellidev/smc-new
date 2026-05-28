@@ -104,6 +104,7 @@ class ConfirmacaoEntrada:
     sl: float
     tp: float
     rr: float
+    expiration_time: datetime | None = None
 
 
 def gerar_id_leg(simbolo: str, tempo_inicio: datetime, tempo_fim: datetime) -> str:

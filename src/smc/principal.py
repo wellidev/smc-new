@@ -9,6 +9,7 @@ import pandas as pd
 from smc.analisador_smc import (
     _calcular_risco_rr_v2,
     calcular_atr,
+    calcular_atr_adaptativo,
     calcular_poi_composta,
     calcular_score_setup,
     detectar_captura_liquidez,
@@ -25,6 +26,7 @@ from smc.analisador_smc import (
 )
 from smc.configuracoes import (
     ATR_PERIODO,
+    ATR_SMA_PERIODO,
     ATIVOS_MONITORADOS,
     CAMINHO_BANCO,
     EXIGIR_CONFIRMACAO_LTF,
@@ -40,6 +42,7 @@ from smc.configuracoes import (
     TIMEFRAME_D1,
     TIMEFRAME_ESTRUTURAL,
     TIMEFRAME_GATILHO,
+    TIMEFRAME_GATILHO_MINUTOS,
     VELAS_D1_HISTORICO,
     VELAS_HISTORICO,
 )
@@ -48,7 +51,7 @@ from smc.modelos import (
     gerar_id_confirmacao,
     gerar_id_setup,
 )
-from smc.filtros import calcular_bias_d1_v2, verificar_sessao, verificar_zona_premium_discount_v2
+from smc.filtros import calcular_bias_d1_v2, calcular_bias_h4, verificar_sessao, verificar_zona_premium_discount_v2
 from smc.notificador import Notificador
 from smc.provedor_dados import ProvedorDados
 from smc.repositorio import Repositorio
@@ -123,6 +126,7 @@ MENSAGEM_SETUP = (
     "📐 R:R 1:{rr:.1f}  |  Displacement: {displacement}\n\n"
     "{check_sessao}\n"
     "{checks_aviso}"
+    "⏳ Válido até: {expiration_str}{expired_flag}\n"
     "⏰ {timestamp}"
 )
 
@@ -164,7 +168,8 @@ def _detectar_e_registrar_setups(
     if not eventos:
         return
 
-    legs = extrair_legs(velas_h4, eventos, simbolo, PERIODO_SWING_ESTRUTURA, atr)
+    atr_disp = calcular_atr_adaptativo(velas_h4, ATR_PERIODO, ATR_SMA_PERIODO)
+    legs = extrair_legs(velas_h4, eventos, simbolo, PERIODO_SWING_ESTRUTURA, atr_disp)
     leg_por_evento: dict[datetime, Any] = {leg.tempo_fim: leg for leg in legs}
 
     pools = detectar_eqh_eql(velas_h4, simbolo, atr)
@@ -176,7 +181,8 @@ def _detectar_e_registrar_setups(
 
     preco_atual = float(velas_m5.iloc[-1]["fechamento"])
     capturas = detectar_captura_liquidez(velas_h4, PERIODO_SWING, LIMIAR_PAVIO, simbolo)
-    bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
+    _bias_h4_setup = calcular_bias_h4(velas_h4, simbolo, PERIODO_SWING_ESTRUTURA)
+    bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1, bias_h4=_bias_h4_setup) if velas_d1 is not None else None
     em_sessao = verificar_sessao(datetime.now(timezone.utc))
     zona_por_direcao: dict[str, bool] = {}
     if velas_d1 is not None:
@@ -281,9 +287,11 @@ def _verificar_confirmacoes(
         notificador: Notificador,
 ) -> None:
     atr = calcular_atr(velas_h4, ATR_PERIODO)
+    atr_m5 = calcular_atr(velas_m5, ATR_PERIODO)
     cutoff = datetime.now(timezone.utc) - timedelta(hours=IDADE_MAX_SETUP_HORAS)
     setups = repo.carregar_setups_ativos(simbolo, cutoff)
-    bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1) if velas_d1 is not None else None
+    _bias_h4 = calcular_bias_h4(velas_h4, simbolo, PERIODO_SWING_ESTRUTURA)
+    bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1, bias_h4=_bias_h4) if velas_d1 is not None else None
     em_sessao = verificar_sessao(datetime.now(timezone.utc))
     zona_por_direcao: dict[str, bool] = {}
     if velas_d1 is not None:
@@ -298,7 +306,7 @@ def _verificar_confirmacoes(
         if EXIGIR_CONFIRMACAO_LTF:
             evento_tempo = datetime.fromisoformat(evento_tempo_str)
             confirmacao = detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo,
-                                              cutoff=evento_tempo, atr=atr, tp_ref=evento_nivel)
+                                              cutoff=evento_tempo, atr_m5=atr_m5, tp_ref=evento_nivel)
             if confirmacao is None:
                 logger.debug(
                     "Setup %s id=%s aguardando: MSS no M5 (POI=[%.5f–%.5f] dir=%s)",
@@ -307,25 +315,28 @@ def _verificar_confirmacoes(
                 continue
             confirmacao.setup_id = setup_id
             confirmacao.id = gerar_id_confirmacao(simbolo, setup_id, confirmacao.tempo)
+            confirmacao.expiration_time = confirmacao.tempo + timedelta(minutes=1 * TIMEFRAME_GATILHO_MINUTOS)
         else:
             if not (poi_fundo <= preco_atual <= poi_topo):
                 continue
             sl_ref = poi_fundo if direcao == "ALTA" else poi_topo
-            rr_result = _calcular_risco_rr_v2(preco_atual, sl_ref, direcao, atr, tp_ref=evento_nivel)
+            rr_result = _calcular_risco_rr_v2(preco_atual, sl_ref, direcao, atr_m5, tp_ref=evento_nivel)
             if rr_result is None:
                 logger.debug("Setup %s id=%s ignorado: risco nulo (poi degenerado)", simbolo, setup_id)
                 continue
             sl, tp, rr = rr_result
+            _agora = datetime.now(timezone.utc)
             confirmacao = ConfirmacaoEntrada(
-                id=gerar_id_confirmacao(simbolo, setup_id, datetime.now(timezone.utc)),
+                id=gerar_id_confirmacao(simbolo, setup_id, _agora),
                 setup_id=setup_id,
                 simbolo=simbolo,
                 tipo_confirmacao="DIRETO",
                 preco_confirmacao=preco_atual,
-                tempo=datetime.now(timezone.utc),
+                tempo=_agora,
                 sl=sl,
                 tp=tp,
                 rr=rr,
+                expiration_time=_agora + timedelta(minutes=1 * TIMEFRAME_GATILHO_MINUTOS),
             )
 
         zona_ok = zona_por_direcao.get(direcao, False)
@@ -362,6 +373,15 @@ def _verificar_confirmacoes(
             displacement=displacement,
             check_sessao=check_sessao,
             checks_aviso=_checks_aviso(check_bias, check_zona),
+            expiration_str=(
+                confirmacao.expiration_time.strftime("%H:%M UTC")
+                if confirmacao.expiration_time else "—"
+            ),
+            expired_flag=(
+                " ❌ EXPIRADO"
+                if confirmacao.expiration_time and datetime.now(timezone.utc) > confirmacao.expiration_time
+                else ""
+            ),
             timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         )
 

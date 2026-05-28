@@ -67,13 +67,29 @@ def calcular_risco_rr(
     return sl, tp, 2.0
 
 
-def calcular_bias_d1_v2(velas_d1: pd.DataFrame, simbolo: str, periodo_swing: int) -> str | None:
+def calcular_bias_h4(velas_h4: pd.DataFrame, simbolo: str, periodo_swing: int) -> str | None:
+    """Direção estrutural ativa do H4 — usada como fallback quando D1 está em transição ChoCH."""
+    eventos = detectar_eventos_estrutura(velas_h4, simbolo, periodo_swing)
+    if not eventos:
+        return None
+    return eventos[-1].direcao
+
+
+def calcular_bias_d1_v2(
+    velas_d1: pd.DataFrame,
+    simbolo: str,
+    periodo_swing: int,
+    bias_h4: str | None = None,
+) -> str | None:
     eventos = detectar_eventos_estrutura(velas_d1, simbolo, periodo_swing)
     if not eventos:
         return None
     ultimo = eventos[-1]
-    # ChoCH = reversão potencial; bias só confirmado após BOS subsequente na mesma direção
-    return ultimo.direcao if ultimo.tipo == "BOS" else None
+    if ultimo.tipo == "BOS":
+        return ultimo.direcao  # bias D1 confirmado — estrutura estabelecida
+    # ChoCH: D1 em transição — herda fluxo estrutural H4 para não travar sinais intradiários
+    # enquanto a tendência secundária percorre centenas de pips na nova direção
+    return bias_h4
 
 
 def verificar_zona_premium_discount_v2(

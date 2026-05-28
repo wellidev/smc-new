@@ -242,6 +242,7 @@ def _buscar_confirmacao(
     if len(janela) == 0:
         return None
 
+    atr_m5 = calcular_atr(velas_m5, ATR_PERIODO)
     conf = detectar_mss_no_poi(
         janela,
         setup["poi_fundo"],
@@ -249,7 +250,7 @@ def _buscar_confirmacao(
         setup["direcao"],
         setup["simbolo"],
         cutoff=None,
-        atr=setup["atr"],
+        atr_m5=atr_m5,
         tp_ref=setup["evento_nivel"],
     )
     if conf is None:

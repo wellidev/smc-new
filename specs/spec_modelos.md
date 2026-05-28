@@ -199,12 +199,13 @@ class ConfirmacaoEntrada:
     id: str               # SHA1(setup_id|tempo.isoformat())[:20]
     setup_id: str
     simbolo: str
-    tipo_confirmacao: str  # "MSS" (único por ora)
+    tipo_confirmacao: str  # "MSS" | "DIRETO"
     preco_confirmacao: float
     tempo: datetime
     sl: float
     tp: float
-    rr: float             # sempre 2.0 (R:R 1:2)
+    rr: float
+    expiration_time: datetime | None = None  # tempo + 2 × TIMEFRAME_GATILHO_MINUTOS
 ```
 
 ---

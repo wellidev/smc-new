@@ -91,20 +91,34 @@ O `ob` é qualquer objeto com atributos `preco_fundo` e `preco_topo` (duck typin
 
 ---
 
-### `calcular_bias_d1_v2(velas_d1: pd.DataFrame, simbolo: str, periodo_swing: int) -> str | None`
-Retorna a direção do bias D1 canônico — confirmado apenas por BOS, não por ChoCH.
+### `calcular_bias_h4(velas_h4: pd.DataFrame, simbolo: str, periodo_swing: int) -> str | None`
+Retorna a direção estrutural ativa do H4 — usada como fallback durante transição ChoCH no D1.
+
+**Algoritmo:**
+1. Chama `detectar_eventos_estrutura(velas_h4, simbolo, periodo_swing)`
+2. Se não há eventos → retorna `None`
+3. Retorna `eventos[-1].direcao` para qualquer tipo de evento (BOS ou ChoCH)
+
+H4 é o timeframe operacional — qualquer evento estrutural define o fluxo intradiário relevante.
+
+---
+
+### `calcular_bias_d1_v2(velas_d1, simbolo, periodo_swing, bias_h4=None) -> str | None`
+Retorna a direção do bias D1 canônico. BOS confirma; ChoCH herda o fluxo H4 como fallback.
+
+**Assinatura:** `calcular_bias_d1_v2(velas_d1: pd.DataFrame, simbolo: str, periodo_swing: int, bias_h4: str | None = None) -> str | None`
 
 **Algoritmo:**
 1. Chama `detectar_eventos_estrutura(velas_d1, simbolo, periodo_swing)` — state machine ChoCH/BOS
 2. Se não há eventos → retorna `None`
-3. Se `eventos[-1].tipo == "BOS"` → retorna `eventos[-1].direcao` (bias confirmado)
-4. Se `eventos[-1].tipo == "ChoCH"` → retorna `None` (reversão potencial sem BOS confirmador; bias incerto)
+3. Se `eventos[-1].tipo == "BOS"` → retorna `eventos[-1].direcao` (bias D1 confirmado)
+4. Se `eventos[-1].tipo == "ChoCH"` → retorna `bias_h4` (herda fluxo H4 durante transição D1)
 
-**Racional canônico (ICT/SMC):**
-- **BOS** = estrutura confirmada na direção; bias definido
-- **ChoCH** = primeiro sinal de reversão potencial; bias permanece incerto até que um BOS na mesma direção confirme
+**Racional operacional (Forex intradiário):**
+- **BOS** = estrutura D1 estabelecida; bias definido com confiança
+- **ChoCH** = D1 em transição (pode durar semanas); bloquear sinais aqui (retornar `None`) gerava custo de oportunidade expressivo. A solução é herdar o fluxo estrutural ativo do H4 enquanto o D1 ainda não confirmou via BOS.
 
-Mais robusto que `calcular_bias_d1` pois usa a state machine completa (HH/HL/LH/LL) em vez de apenas 2 swings consecutivos, e não antecipa o bias antes da confirmação estrutural.
+O caller é responsável por computar `bias_h4 = calcular_bias_h4(velas_h4, simbolo, PERIODO_SWING_ESTRUTURA)` antes de chamar esta função.
 
 ---
 
@@ -128,9 +142,13 @@ Mais preciso que `verificar_zona_premium_discount` pois usa o range estrutural r
 | F14 | `calcular_bias_d1_v2` | Último evento é **BOS** ALTA | `"ALTA"` |
 | F15 | `calcular_bias_d1_v2` | Último evento é **BOS** BAIXA | `"BAIXA"` |
 | F16 | `calcular_bias_d1_v2` | Sem eventos estruturais detectados | `None` |
-| F21 | `calcular_bias_d1_v2` | Último evento é ChoCH ALTA (sem BOS posterior) | `None` |
-| F22 | `calcular_bias_d1_v2` | Último evento é ChoCH BAIXA (sem BOS posterior) | `None` |
+| F21 | `calcular_bias_d1_v2` | ChoCH ALTA, `bias_h4=None` | `None` (D1 em transição sem referência H4) |
+| F22 | `calcular_bias_d1_v2` | ChoCH BAIXA, `bias_h4=None` | `None` |
 | F25 | `calcular_bias_d1_v2` | ChoCH ALTA seguido de BOS ALTA (confirmado) | `"ALTA"` |
+| F26 | `calcular_bias_d1_v2` | ChoCH ALTA, `bias_h4="ALTA"` | `"ALTA"` (herda H4) |
+| F27 | `calcular_bias_d1_v2` | ChoCH ALTA, `bias_h4="BAIXA"` | `"BAIXA"` (H4 ainda bearish) |
+| F28 | `calcular_bias_h4` | Último evento H4 é BOS ou ChoCH | direção do evento |
+| F29 | `calcular_bias_h4` | Sem eventos H4 | `None` |
 | F17 | `verificar_zona_premium_discount_v2` | ALTA, preço abaixo do equilíbrio | `True` |
 | F18 | `verificar_zona_premium_discount_v2` | ALTA, preço acima do equilíbrio | `False` |
 | F19 | `verificar_zona_premium_discount_v2` | BAIXA, preço acima do equilíbrio | `True` |

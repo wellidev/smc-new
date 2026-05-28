@@ -42,6 +42,7 @@ from smc.configuracoes import (
 )
 from smc.filtros import (
     calcular_bias_d1_v2,
+    calcular_bias_h4,
     calcular_swings_confirmados as _swings_conf_filtros,
     verificar_sessao,
 )
@@ -78,7 +79,7 @@ def _yn(v: bool) -> str:
 # Helpers de sub-seções reutilizáveis
 # ---------------------------------------------------------------------------
 
-def _print_ctx_bias_d1(simbolo: str, velas_d1: pd.DataFrame | None, preco_atual: float) -> tuple[str | None, bool, bool]:
+def _print_ctx_bias_d1(simbolo: str, velas_d1: pd.DataFrame | None, preco_atual: float, velas_h4: pd.DataFrame | None = None, periodo_swing_h4: int = 5) -> tuple[str | None, bool, bool]:
     """Imprime a seção CTX e retorna (bias_d1, zona_alta, zona_baixa)."""
     print(f"\n[CTX] CONTEXTO DIRECIONAL")
     print(f"  Preço atual (M5 close) : {_fmt(preco_atual, simbolo)}")
@@ -90,13 +91,14 @@ def _print_ctx_bias_d1(simbolo: str, velas_d1: pd.DataFrame | None, preco_atual:
         print("  Bias D1                : — (sem dados D1)")
         print("  Premium/Discount       : — (sem dados D1)")
     else:
-        # Bias D1 — mostrar qual BOS D1 o definiu
+        # Bias D1 — BOS confirma; ChoCH herda H4 como fallback
         eventos_d1 = detectar_eventos_estrutura(velas_d1, simbolo, PERIODO_SWING_D1)
-        bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1)
+        _bias_h4_for_d1 = calcular_bias_h4(velas_h4, simbolo, periodo_swing_h4) if velas_h4 is not None else None
+        bias_d1 = calcular_bias_d1_v2(velas_d1, simbolo, PERIODO_SWING_D1, bias_h4=_bias_h4_for_d1)
         if bias_d1 is None:
             ultimo_d1 = eventos_d1[-1] if eventos_d1 else None
             if ultimo_d1:
-                print(f"  Bias D1                : Neutro (último evento={ultimo_d1.tipo} {ultimo_d1.direcao} — ChoCH não confirma bias)")
+                print(f"  Bias D1                : Neutro (ChoCH {ultimo_d1.direcao} — sem bias H4 disponível)")
             else:
                 print(f"  Bias D1                : Neutro (sem eventos D1)")
         else:
@@ -105,7 +107,9 @@ def _print_ctx_bias_d1(simbolo: str, velas_d1: pd.DataFrame | None, preco_atual:
                 print(f"  Bias D1                : {bias_d1}")
                 print(f"    derivado de: BOS {bos_d1.direcao}  nível={_fmt(bos_d1.nivel_rompido, simbolo)}  {_t(bos_d1.tempo)}")
             else:
-                print(f"  Bias D1                : {bias_d1}  (BOS D1 não localizado)")
+                ultimo_d1 = eventos_d1[-1] if eventos_d1 else None
+                fonte = f"ChoCH {ultimo_d1.direcao} → herdado H4" if ultimo_d1 else "H4"
+                print(f"  Bias D1                : {bias_d1}  ({fonte})")
 
         # Premium/Discount — mostrar midpoint explícito
         swings_d1 = calcular_swings_confirmados(velas_d1, PERIODO_SWING_D1)
@@ -233,7 +237,7 @@ def auditar_pipeline(
 
     # ── CTX: Contexto direcional ─────────────────────────────────────────────
     preco_atual = float(velas_m5.iloc[-1]["fechamento"])
-    bias_d1, zona_alta, zona_baixa = _print_ctx_bias_d1(simbolo, velas_d1, preco_atual)
+    bias_d1, zona_alta, zona_baixa = _print_ctx_bias_d1(simbolo, velas_d1, preco_atual, velas_h4=velas_h4, periodo_swing_h4=PERIODO_SWING_ESTRUTURA)
     zona_por_direcao = {"ALTA": zona_alta, "BAIXA": zona_baixa}
 
     # ── G4: Sweeps ──────────────────────────────────────────────────────────
@@ -450,7 +454,6 @@ def auditar_setups_ativos(
         auditar_mss_para_setup(
             simbolo=simbolo,
             velas_m5=velas_m5,
-            atr=atr,
             poi_fundo=poi_fundo,
             poi_topo=poi_topo,
             direcao=direcao,
@@ -466,7 +469,6 @@ def auditar_setups_ativos(
 def auditar_mss_para_setup(
     simbolo: str,
     velas_m5: pd.DataFrame,
-    atr: float,
     poi_fundo: float,
     poi_topo: float,
     direcao: str,
@@ -476,6 +478,7 @@ def auditar_mss_para_setup(
     """Audita o MSS M5 para um setup com os valores passados."""
     print(f"\n  [MSS M5] {direcao}  POI=[{_fmt(poi_fundo, simbolo)}–{_fmt(poi_topo, simbolo)}]")
 
+    atr_m5 = calcular_atr(velas_m5, 14)  # ATR do M5 — buffer correto para entrada refinada no M5
     df = velas_m5
     if cutoff is not None:
         if cutoff.tzinfo is None:
@@ -522,7 +525,7 @@ def auditar_mss_para_setup(
                 v = velas_poi.iloc[j]
                 close = float(v["fechamento"])
                 if close > sh_price:
-                    rr = _calcular_risco_rr_v2(sh_price, sl_ref, direcao, atr, tp_ref)
+                    rr = _calcular_risco_rr_v2(sh_price, sl_ref, direcao, atr_m5, tp_ref)
                     if rr:
                         sl_v, tp_v, rr_v = rr
                         print(f"      ✓ [{j}] close={_fmt(close, simbolo)} confirma MSS")
@@ -548,7 +551,7 @@ def auditar_mss_para_setup(
                 v = velas_poi.iloc[j]
                 close = float(v["fechamento"])
                 if close < sl_price:
-                    rr = _calcular_risco_rr_v2(sl_price, sl_ref, direcao, atr, tp_ref)
+                    rr = _calcular_risco_rr_v2(sl_price, sl_ref, direcao, atr_m5, tp_ref)
                     if rr:
                         sl_v, tp_v, rr_v = rr
                         print(f"      ✓ [{j}] close={_fmt(close, simbolo)} confirma MSS")

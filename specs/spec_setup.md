@@ -112,7 +112,7 @@ para cada setup em setups_ativos:
 
 ---
 
-## `detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo, cutoff=None) -> ConfirmacaoEntrada | None`
+## `detectar_mss_no_poi(velas_m5, poi_fundo, poi_topo, direcao, simbolo, cutoff=None, atr_m5=0.0, tp_ref=None) -> ConfirmacaoEntrada | None`
 
 MSS (Market Structure Shift) canônico no M5 dentro da POI — ChoCH de LTF
 confirmando rejeição da zona. Equivalente a um *Change of Character* clássico:
@@ -131,12 +131,16 @@ o preço forma micro-estrutura interna e a primeira vela que fecha além do
       - Selecionar o PRIMEIRO swing HIGH com idx > sl_idx → (sh_idx, sh_price).
         Se não houver, próximo sl_idx.
       - Para j em (sh_idx + 1, len(velas_poi) - 1]:
-          se velas_poi.iloc[j].fechamento > sh_price:
+          se fechamento > sh_price AND fechamento > abertura (corpo bullish):
               preco = sh_price   ← entrada no nível rompido (limite), não no close
               tempo = vela j
               retornar ConfirmacaoEntrada(tipo="MSS", ...)
+   Requisito de corpo: a vela confirmadora deve fechar acima do nível COM corpo
+   bullish (close > open). Pavios que cruzam o nível sem pressão direcional
+   (close < open = corpo bearish) são rejeitados — evitam falsos MSS intradiários.
 6. Para direcao="BAIXA" (setup de venda): simétrico — swing HIGH primeiro,
-   depois swing LOW posterior, depois fechamento abaixo do swing LOW.
+   depois swing LOW posterior, depois fechamento abaixo do swing LOW
+   com corpo bearish (close < open).
    preco = sl_price  ← entrada no nível rompido (limite), não no close
 7. SL/TP via _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref):
    - Para ALTA: sl_ref = swings_low[sl_idx] — o swing low que iniciou a sequência MSS
@@ -144,6 +148,7 @@ o preço forma micro-estrutura interna e a primeira vela que fecha além do
    - Para BAIXA: sl_ref = swings_high[sh_idx] — o swing high que iniciou a sequência MSS
      (ponto de invalidação estrutural: acima dele a tese de venda falha)
    - tp_ref: evento_nivel (nível do ChoCH/BOS H4 que gerou o setup), injetado pelo caller
+   `atr_m5` é computado pelo caller a partir de `calcular_atr(velas_m5, ATR_PERIODO)` e passado aqui — garantindo que o buffer de SL usa volatilidade do timeframe de confirmação.
    se retornar None (risco <= 0), pular essa candidata.
 8. Se nada encontrado: return None.
 ```
@@ -152,6 +157,22 @@ o preço forma micro-estrutura interna e a primeira vela que fecha além do
 `calcular_swings(..., periodo=1)` consiga identificar pelo menos um swing).
 Na prática, a sequência completa LOW→HIGH→confirmação exige ~6 candles para
 produzir resultado, mas o guard `< 3` serve apenas de fast-path.
+
+**`expiration_time`:** `confirmacao.expiration_time = confirmacao.tempo + timedelta(minutes=1 × TIMEFRAME_GATILHO_MINUTOS)`. Para M5 (+5 min). O caller (`_verificar_confirmacoes`) atribui o campo após receber o objeto de `detectar_mss_no_poi`. Reduzido de 2× para 1× porque no M5 Forex o preço frequentemente mitiga o FVG local nos primeiros 60–120 s; validade de 10 min levaria o operador manual a entrar no topo/fundo da microfase.
+
+---
+
+## `calcular_atr_adaptativo(velas, periodo=14, sma_periodo=50) -> float`
+
+ATR de Wilder normalizado pela sua SMA de longo prazo — usado exclusivamente no Gate 4 (displacement H4).
+
+**Algoritmo:**
+1. Constrói série de TR e aplica suavização Wilder → `atr_series[]`
+2. `atr_atual = atr_series[-1]`
+3. `sma_atr = média(atr_series[-sma_periodo:])` (ou média total se amostras insuficientes)
+4. Retorna `max(atr_atual, sma_atr)`
+
+**Racional:** durante baixa volatilidade sazonal (ex: agosto), `atr_atual` cai abaixo da média histórica. Usar apenas `atr_atual` afrouxaria o limiar de 1.5× do Gate 4, aceitando movimentos sem injeção real de volume. O `max()` aplica floor na média de longo prazo. Usado em `extrair_legs`; `calcular_atr` bruto continua sendo usado para buffers de SL.
 
 ---
 
@@ -178,26 +199,32 @@ Score composicional 0–100:
 
 ---
 
-## `_calcular_risco_rr_v2(preco_entrada, sl_ref, direcao, atr=0.0, tp_ref=None) -> tuple[float, float, float] | None`
+## `_calcular_risco_rr_v2(preco_entrada, sl_ref, direcao, atr_m5=0.0, tp_ref=None) -> tuple[float, float, float] | None`
 
 ```python
-buffer = 0.1 * atr
+buffer = 0.5 * atr_m5
 se direcao == "ALTA":
     sl = sl_ref - buffer        # sl_ref = swing low estrutural do MSS (M5) ou poi_fundo no modo DIRETO
     risco = preco_entrada - sl
     se risco <= 0: return None
     tp_candidato = tp_ref se (tp_ref is not None and tp_ref > preco_entrada) else None
-    se tp_candidato and (tp_candidato - preco_entrada) / risco >= 1.5:
-        tp = tp_candidato       # alvo estrutural: nível ChoCH/BOS H4
+    se tp_candidato is not None:
+        se (tp_candidato - preco_entrada) / risco >= 1.5:
+            tp = tp_candidato   # alvo estrutural: nível ChoCH/BOS H4
+        else:
+            return None         # barreira H4 próxima demais — projetar além seria rejeitado antes do TP
     else:
-        tp = preco_entrada + 2.0 * risco   # fallback mecânico
+        tp = preco_entrada + 2.0 * risco   # sem barreira H4 conhecida — extensão mecânica
 else:
     sl = sl_ref + buffer        # sl_ref = swing high estrutural do MSS (M5) ou poi_topo no modo DIRETO
     risco = sl - preco_entrada
     se risco <= 0: return None
     tp_candidato = tp_ref se (tp_ref is not None and tp_ref < preco_entrada) else None
-    se tp_candidato and (preco_entrada - tp_candidato) / risco >= 1.5:
-        tp = tp_candidato
+    se tp_candidato is not None:
+        se (preco_entrada - tp_candidato) / risco >= 1.5:
+            tp = tp_candidato
+        else:
+            return None         # barreira H4 próxima demais — projetar além seria rejeitado antes do TP
     else:
         tp = preco_entrada - 2.0 * risco
 
@@ -207,8 +234,8 @@ return sl, tp, round(rr, 2)
 
 Parâmetros:
 - `sl_ref`: nível de invalidação estrutural. No modo MSS: swing low (ALTA) ou swing high (BAIXA) da micro-estrutura M5. No modo DIRETO: poi_fundo (ALTA) ou poi_topo (BAIXA).
-- `tp_ref`: alvo estrutural opcional — `evento_nivel` (nível do ChoCH/BOS H4). Priorizado quando dá RR ≥ 1.5; caso contrário usa extensão mecânica 2× risco.
-- `atr`: H4 ATR de Wilder (padrão 0.0). Buffer `0.1×ATR` afasta o SL do swing/POI para absorver ruído imediato.
+- `tp_ref`: alvo estrutural opcional — `evento_nivel` (nível do ChoCH/BOS H4). Quando presente: se RR ≥ 1.5 usa como TP; se RR < 1.5 **descarta o setup** (barreira macro muito próxima). Sem `tp_ref`: usa extensão mecânica 2× risco.
+- `atr_m5`: M5 ATR de Wilder (padrão 0.0). Buffer `0.5×ATR(M5)` afasta o SL do micro-swing para absorver ruído do M5. Usar ATR(H4) inflaria artificialmente o stop de uma entrada refinada no M5, destruindo a assimetria R:R do Day Trade.
 
 ---
 
@@ -251,7 +278,7 @@ CREATE TABLE IF NOT EXISTS confirmacoes (
 ```python
 EXIGIR_CONFIRMACAO_LTF: bool = True
 SCORE_MINIMO_SETUP: int = 40
-IDADE_MAX_SETUP_HORAS: int = 60  # 15 velas H4 × 4h
+IDADE_MAX_SETUP_HORAS: int = 12  # intradiário — contexto Forex invalida ordens > 12 h
 ```
 
 ---

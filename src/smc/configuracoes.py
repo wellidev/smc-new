@@ -28,7 +28,7 @@ ATIVOS_MONITORADOS: list[str] = [
 TIMEFRAME_ESTRUTURAL: int = TIMEFRAME_H4
 TIMEFRAME_GATILHO: int = TIMEFRAME_M5
 
-VELAS_HISTORICO: int = 500
+VELAS_HISTORICO: int = 120  # ~3–4 sessões semanais; reduzido para evitar Over-Mapping no Day Trading M5
 VELAS_D1_HISTORICO: int = 50
 PERIODO_SWING: int = 5
 PERIODO_SWING_ESTRUTURA: int = 5
@@ -56,6 +56,8 @@ INTERVALO_VARREDURA_SEGUNDOS: int = 60
 # Phase 5 — setup pipeline
 EXIGIR_CONFIRMACAO_LTF: bool = True
 SCORE_MINIMO_SETUP: int = 40
-IDADE_MAX_SETUP_HORAS: int = 60   # 15 × 4h
+IDADE_MAX_SETUP_HORAS: int = 12   # intradiário — contexto Forex invalida ordens > 12 h
 ATR_PERIODO: int = 14
+ATR_SMA_PERIODO: int = 50          # janela SMA para normalização do ATR adaptativo (Gate 4)
+TIMEFRAME_GATILHO_MINUTOS: int = 5  # duração do candle de gatilho em minutos (M5)
 

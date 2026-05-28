@@ -11,7 +11,7 @@ Centralizar todos os parâmetros de configuração. Não contém lógica de neg�
 | `TIMEFRAME_ESTRUTURAL` | `int` | `mt5.TIMEFRAME_H4` | Timeframe de análise estrutural |
 | `TIMEFRAME_GATILHO` | `int` | `mt5.TIMEFRAME_M5` | Timeframe de confirmação LTF (MSS dentro da POI) |
 | `TIMEFRAME_D1` | `int` | `mt5.TIMEFRAME_D1` (fallback `16408`) | Timeframe diário para bias macro e premium/discount |
-| `VELAS_HISTORICO` | `int` | `500` | Janela de candles H4 carregados por símbolo |
+| `VELAS_HISTORICO` | `int` | `120` | Janela de candles H4 carregados por símbolo — ~3–4 sessões semanais; reduzido para evitar Over-Mapping (POIs obsoletas) no Day Trading M5 |
 | `VELAS_D1_HISTORICO` | `int` | `50` | Janela de candles D1 para bias e premium/discount |
 | `PERIODO_SWING` | `int` | `5` | N candles em cada lado para swing H4 (captura de liquidez) — alinhado com PERIODO_SWING_ESTRUTURA para evitar assimetria |
 | `PERIODO_SWING_ESTRUTURA` | `int` | `5` | N candles em cada lado para ChoCH/BOS |
@@ -25,6 +25,12 @@ Centralizar todos os parâmetros de configuração. Não contém lógica de neg�
 | `TELEGRAM_TOKEN` | `str` | env `SMC_TELEGRAM_TOKEN` | Token do bot Telegram |
 | `TELEGRAM_CHAT_ID` | `str` | env `SMC_TELEGRAM_CHAT_ID` | ID do chat/grupo Telegram |
 | `INTERVALO_VARREDURA_SEGUNDOS` | `int` | `60` | Pausa entre ciclos do loop principal |
+| `EXIGIR_CONFIRMACAO_LTF` | `bool` | `True` | Exige MSS no M5 antes de disparar sinal |
+| `SCORE_MINIMO_SETUP` | `int` | `40` | Score mínimo para persistir um SetupSMC |
+| `IDADE_MAX_SETUP_HORAS` | `int` | `12` | Tempo máximo de vida de um setup ativo (intradiário — contexto Forex invalida ordens > 12 h) |
+| `ATR_PERIODO` | `int` | `14` | Janela do ATR de Wilder para H4 |
+| `ATR_SMA_PERIODO` | `int` | `50` | Janela da SMA do ATR para normalização adaptativa (Gate 4) |
+| `TIMEFRAME_GATILHO_MINUTOS` | `int` | `5` | Duração em minutos do candle de gatilho (M5) — `expiration_time = tempo + timedelta(minutes=1 × TIMEFRAME_GATILHO_MINUTOS)` (5 min); reduzido de 2× para evitar entradas atrasadas no topo/fundo da microfase |
 | `MENSAGEM_ALERTA` | `str` | Ver abaixo | Template f-string da mensagem Telegram |
 
 ## Ativos Monitorados (padrão)

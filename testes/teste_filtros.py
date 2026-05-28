@@ -6,6 +6,7 @@ import pytest
 from smc.filtros import (
     calcular_bias_d1,
     calcular_bias_d1_v2,
+    calcular_bias_h4,
     calcular_risco_rr,
     verificar_sessao,
     verificar_zona_premium_discount,
@@ -321,13 +322,21 @@ class TestCalcularBiasD1V2:
         linhas[22] = _vela_d1(ts[22], base, base + 0.0060, base - step, base)   # H4 > H3 (BOS ALTA)
         return _df(linhas)
 
-    def test_choch_alta_sem_confirmacao_retorna_none(self):
-        # F21: ChoCH ALTA como último evento (sem BOS confirmador) → None
+    def test_choch_sem_bias_h4_retorna_none(self):
+        # F21: ChoCH ALTA sem bias_h4 fornecido → retorna None (D1 em transição sem referência H4)
         assert calcular_bias_d1_v2(self._velas_choch_alta(), "EURUSD", periodo_swing=2) is None
 
-    def test_choch_baixa_sem_confirmacao_retorna_none(self):
-        # F22: ChoCH BAIXA como último evento (sem BOS confirmador) → None
+    def test_choch_baixa_sem_bias_h4_retorna_none(self):
+        # F22: ChoCH BAIXA sem bias_h4 fornecido → retorna None
         assert calcular_bias_d1_v2(self._velas_choch_baixa(), "EURUSD", periodo_swing=2) is None
+
+    def test_choch_herda_bias_h4_alta(self):
+        # F26: ChoCH ALTA + bias_h4="ALTA" → herda "ALTA" do fluxo H4
+        assert calcular_bias_d1_v2(self._velas_choch_alta(), "EURUSD", periodo_swing=2, bias_h4="ALTA") == "ALTA"
+
+    def test_choch_herda_bias_h4_contrario(self):
+        # F27: ChoCH ALTA + bias_h4="BAIXA" → retorna "BAIXA" (H4 ainda bearish durante transição D1)
+        assert calcular_bias_d1_v2(self._velas_choch_alta(), "EURUSD", periodo_swing=2, bias_h4="BAIXA") == "BAIXA"
 
     def test_bos_alta_retorna_alta(self):
         # F23: BOS ALTA como último evento → "ALTA"
@@ -346,6 +355,52 @@ class TestCalcularBiasD1V2:
         ts = _ts(10)
         linhas = [_vela_d1(ts[i], 1.1000, 1.1010, 1.0990, 1.1000) for i in range(10)]
         assert calcular_bias_d1_v2(_df(linhas), "EURUSD", periodo_swing=2) is None
+
+
+# ---------------------------------------------------------------------------
+# calcular_bias_h4
+# ---------------------------------------------------------------------------
+
+class TestCalcularBiasH4:
+    """calcular_bias_h4 retorna direção para qualquer evento (BOS ou ChoCH)."""
+
+    def _velas_bos_alta(self) -> pd.DataFrame:
+        ts = _ts(20)
+        base = 1.1000
+        step = 0.0050
+        n = len(ts)
+        linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
+        linhas[4]  = _vela_d1(ts[4],  base, base + 0.0040, base - step, base)
+        linhas[7]  = _vela_d1(ts[7],  base, base + step,   base - 0.0040, base)
+        linhas[10] = _vela_d1(ts[10], base, base + 0.0060, base - step, base)
+        linhas[13] = _vela_d1(ts[13], base, base + step,   base - 0.0020, base)
+        return _df(linhas)
+
+    def _velas_choch_alta(self) -> pd.DataFrame:
+        ts = _ts(20)
+        base = 1.1000
+        step = 0.0050
+        n = len(ts)
+        linhas = [_vela_d1(ts[i], base, base + step, base - step, base) for i in range(n)]
+        linhas[4]  = _vela_d1(ts[4],  base, base + step,   base - 0.0040, base)
+        linhas[7]  = _vela_d1(ts[7],  base, base + 0.0040, base - step, base)
+        linhas[10] = _vela_d1(ts[10], base, base + step,   base - 0.0060, base)
+        linhas[13] = _vela_d1(ts[13], base, base + 0.0030, base - step, base)
+        return _df(linhas)
+
+    def test_bos_retorna_direcao(self):
+        # H4 BOS → retorna a direção confirmada
+        assert calcular_bias_h4(self._velas_bos_alta(), "EURUSD", periodo_swing=2) == "ALTA"
+
+    def test_choch_retorna_direcao(self):
+        # H4 ChoCH → retorna imediatamente (sem aguardar BOS)
+        resultado = calcular_bias_h4(self._velas_choch_alta(), "EURUSD", periodo_swing=2)
+        assert resultado in ("ALTA", "BAIXA")  # direcao do ChoCH
+
+    def test_sem_eventos_retorna_none(self):
+        ts = _ts(10)
+        linhas = [_vela_d1(ts[i], 1.1000, 1.1010, 1.0990, 1.1000) for i in range(10)]
+        assert calcular_bias_h4(_df(linhas), "EURUSD", periodo_swing=2) is None
 
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import pytest
 
 from smc.analisador_smc import (
     _calcular_risco_rr_v2,
+    calcular_atr_adaptativo,
     calcular_score_setup,
     detectar_mss_no_poi,
 )
@@ -160,9 +161,43 @@ class TestDetectarMssNoPoi:
         df = self._df_mss_bullish()
         result = detectar_mss_no_poi(df, 1.1000, 1.1060, "ALTA", "EURUSD")
         assert result is not None
-        assert result.sl <= result.preco_confirmacao  # SL below entry for ALTA
-        assert result.tp > result.preco_confirmacao   # TP above entry for ALTA
+        assert result.sl <= result.preco_confirmacao
+        assert result.tp > result.preco_confirmacao
         assert result.rr == pytest.approx(2.0)
+
+    def test_mss_bullish_corpo_bearish_nao_detecta(self):
+        # Pavio acima do swing HIGH com corpo bearish (close < open) — nao confirma MSS ALTA
+        ts = _ts(9)
+        linhas = [
+            _vela(ts[0], 1.1040, 1.1050, 1.1035, 1.1040),
+            _vela(ts[1], 1.1040, 1.1050, 1.1035, 1.1040),
+            _vela(ts[2], 1.1035, 1.1045, 1.1010, 1.1015),
+            _vela(ts[3], 1.1020, 1.1035, 1.1015, 1.1030),
+            _vela(ts[4], 1.1030, 1.1055, 1.1025, 1.1050),  # swing HIGH @ 1.1055
+            _vela(ts[5], 1.1045, 1.1050, 1.1040, 1.1045),
+            _vela(ts[6], 1.1045, 1.1050, 1.1040, 1.1045),
+            _vela(ts[7], 1.1070, 1.1075, 1.1048, 1.1058),  # close > sh mas bearish (open=1.1070)
+            _vela(ts[8], 1.1055, 1.1060, 1.1050, 1.1055),  # doji
+        ]
+        result = detectar_mss_no_poi(_df(linhas), 1.1000, 1.1075, "ALTA", "EURUSD")
+        assert result is None
+
+    def test_mss_bearish_corpo_bullish_nao_detecta(self):
+        # Pavio abaixo do swing LOW com corpo bullish (close > open) — nao confirma MSS BAIXA
+        ts = _ts(9)
+        linhas = [
+            _vela(ts[0], 1.1040, 1.1050, 1.1035, 1.1040),
+            _vela(ts[1], 1.1040, 1.1050, 1.1035, 1.1040),
+            _vela(ts[2], 1.1045, 1.1055, 1.1040, 1.1050),  # swing HIGH
+            _vela(ts[3], 1.1045, 1.1050, 1.1038, 1.1040),
+            _vela(ts[4], 1.1035, 1.1040, 1.1005, 1.1010),  # swing LOW @ 1.1005
+            _vela(ts[5], 1.1015, 1.1025, 1.1010, 1.1020),
+            _vela(ts[6], 1.1020, 1.1030, 1.1015, 1.1025),
+            _vela(ts[7], 1.0985, 1.1025, 1.0992, 1.0998),  # close < sl mas bullish (open=1.0985)
+            _vela(ts[8], 1.1000, 1.1005, 1.0995, 1.1000),  # doji
+        ]
+        result = detectar_mss_no_poi(_df(linhas), 1.1000, 1.1060, "BAIXA", "EURUSD")
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -278,22 +313,22 @@ class TestCalcularRiscoRrV2:
         result = _calcular_risco_rr_v2(1.1100, 1.1100, "BAIXA")
         assert result is None
 
-    def test_alta_sl_com_buffer_atr(self):
-        atr = 0.0010
-        result = _calcular_risco_rr_v2(1.1100, 1.1000, "ALTA", atr=atr)
+    def test_alta_sl_com_buffer_atr_m5(self):
+        atr_m5 = 0.0010
+        result = _calcular_risco_rr_v2(1.1100, 1.1000, "ALTA", atr_m5=atr_m5)
         assert result is not None
         sl, tp, rr = result
-        assert sl == pytest.approx(1.1000 - 0.1 * atr)
+        assert sl == pytest.approx(1.1000 - 0.5 * atr_m5)
         risco = 1.1100 - sl
         assert tp == pytest.approx(1.1100 + 2.0 * risco)
         assert rr == pytest.approx(2.0)
 
-    def test_baixa_sl_com_buffer_atr(self):
-        atr = 0.0010
-        result = _calcular_risco_rr_v2(1.1050, 1.1100, "BAIXA", atr=atr)
+    def test_baixa_sl_com_buffer_atr_m5(self):
+        atr_m5 = 0.0010
+        result = _calcular_risco_rr_v2(1.1050, 1.1100, "BAIXA", atr_m5=atr_m5)
         assert result is not None
         sl, tp, rr = result
-        assert sl == pytest.approx(1.1100 + 0.1 * atr)
+        assert sl == pytest.approx(1.1100 + 0.5 * atr_m5)
         risco = sl - 1.1050
         assert tp == pytest.approx(1.1050 - 2.0 * risco)
         assert rr == pytest.approx(2.0)
@@ -308,13 +343,9 @@ class TestCalcularRiscoRrV2:
         assert rr == pytest.approx(3.0)
 
     def test_alta_tp_estrutural_rr_insuficiente(self):
-        # tp_ref=1.1080 → rr = (1.1080-1.1050)/0.0050 = 0.6 < 1.5 → fallback 2×
+        # tp_ref=1.1080 → rr = (1.1080-1.1050)/0.0050 = 0.6 < 1.5 → descarta (barreira H4 próxima)
         result = _calcular_risco_rr_v2(1.1050, 1.1000, "ALTA", tp_ref=1.1080)
-        assert result is not None
-        sl, tp, rr = result
-        assert sl == pytest.approx(1.1000)
-        assert tp == pytest.approx(1.1050 + 2 * (1.1050 - 1.1000))
-        assert rr == pytest.approx(2.0)
+        assert result is None
 
     def test_baixa_tp_estrutural_rr_suficiente(self):
         # tp_ref=1.0950 → rr = (1.1050-1.0950)/0.0050 = 2.0 ≥ 1.5 → usa tp_ref
@@ -324,3 +355,52 @@ class TestCalcularRiscoRrV2:
         assert sl == pytest.approx(1.1100)
         assert tp == pytest.approx(1.0950)
         assert rr == pytest.approx(2.0)
+
+    def test_baixa_tp_estrutural_rr_insuficiente(self):
+        # tp_ref=1.1020 → rr = (1.1050-1.1020)/0.0050 = 0.6 < 1.5 → descarta (barreira H4 próxima)
+        result = _calcular_risco_rr_v2(1.1050, 1.1100, "BAIXA", tp_ref=1.1020)
+        assert result is None
+
+# ---------------------------------------------------------------------------
+# calcular_atr_adaptativo
+# ---------------------------------------------------------------------------
+
+class TestCalcularAtrAdaptativo:
+    def _df_velas(self, n: int, amplitude: float) -> object:
+        import pandas as pd
+        from datetime import datetime, timedelta, timezone
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        rows = []
+        for i in range(n):
+            rows.append({
+                "tempo": base + timedelta(hours=4 * i),
+                "abertura": 1.1000,
+                "maxima": 1.1000 + amplitude,
+                "minima": 1.1000 - amplitude,
+                "fechamento": 1.1000,
+                "volume": 100,
+            })
+        return pd.DataFrame(rows)
+
+    def test_insuficiente_retorna_zero(self):
+        df = self._df_velas(5, 0.0010)
+        assert calcular_atr_adaptativo(df, periodo=14) == 0.0
+
+    def test_resultado_ge_calcular_atr(self):
+        # adaptativo >= atr basico (floor behavior)
+        import pandas as pd
+        from smc.analisador_smc import calcular_atr
+        df_alta = self._df_velas(30, 0.0050)   # historico com amplitude normal
+        df_baixa = self._df_velas(20, 0.0005)  # candles mais recentes com amplitude baixa
+        df = pd.concat([df_alta, df_baixa], ignore_index=True)
+        atr_raw = calcular_atr(df, 14)
+        atr_adapt = calcular_atr_adaptativo(df, 14, sma_periodo=15)
+        assert atr_adapt >= atr_raw
+
+    def test_volatilidade_uniforme(self):
+        # Com amplitude constante, adaptativo == atr basico (sem floor ativado)
+        from smc.analisador_smc import calcular_atr
+        df = self._df_velas(70, 0.0020)
+        atr_raw = calcular_atr(df, 14)
+        atr_adapt = calcular_atr_adaptativo(df, 14, sma_periodo=50)
+        assert atr_adapt == pytest.approx(atr_raw, rel=1e-6)

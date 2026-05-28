@@ -246,6 +246,41 @@ def calcular_atr(velas: pd.DataFrame, periodo: int = 14) -> float:
     return atr
 
 
+def calcular_atr_adaptativo(velas: pd.DataFrame, periodo: int = 14, sma_periodo: int = 50) -> float:
+    """Wilder ATR normalizado pela sua própria SMA de longo prazo.
+
+    Retorna max(atr_atual, sma_atr) — garante que o limiar de displacement
+    (Gate 4: 1.5x ATR) não afrouxe durante períodos sazonais de baixa
+    volatilidade no Forex, refletindo apenas injeções reais de volume.
+    """
+    velas_f = velas.iloc[:-1]
+    n = len(velas_f)
+    if n < periodo + 1:
+        return 0.0
+
+    trs: list[float] = []
+    for i in range(1, n):
+        high = float(velas_f["maxima"].iloc[i])
+        low = float(velas_f["minima"].iloc[i])
+        prev_close = float(velas_f["fechamento"].iloc[i - 1])
+        trs.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+
+    if len(trs) < periodo:
+        return 0.0
+
+    atr_series: list[float] = []
+    atr = sum(trs[:periodo]) / periodo
+    atr_series.append(atr)
+    for tr in trs[periodo:]:
+        atr = (atr * (periodo - 1) + tr) / periodo
+        atr_series.append(atr)
+
+    atr_atual = atr_series[-1]
+    janela = min(sma_periodo, len(atr_series))
+    sma_atr = sum(atr_series[-janela:]) / janela
+    return max(atr_atual, sma_atr)
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 — Structure state machine
 # ---------------------------------------------------------------------------
@@ -682,7 +717,7 @@ def detectar_mss_no_poi(
     direcao: str,
     simbolo: str,
     cutoff: datetime | None = None,
-    atr: float = 0.0,
+    atr_m5: float = 0.0,
     tp_ref: float | None = None,
 ) -> ConfirmacaoEntrada | None:
     """Detect Market Structure Shift (ChoCH LTF) on M5 within the POI zone.
@@ -724,9 +759,11 @@ def detectar_mss_no_poi(
             sh_price = sh_candidates[sh_idx]
             for j in range(sh_idx + 1, len(velas_poi)):
                 v = velas_poi.iloc[j]
-                if float(v["fechamento"]) > sh_price:
+                fechamento = float(v["fechamento"])
+                # exige close bullish acima do nível — rejeita pavio sem corpo direcional
+                if fechamento > sh_price and fechamento > float(v["abertura"]):
                     preco = sh_price  # entrada no nível rompido (limite), não no close da vela
-                    rr_result = _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref)
+                    rr_result = _calcular_risco_rr_v2(preco, sl_ref, direcao, atr_m5, tp_ref)
                     if rr_result is None:
                         continue
                     sl, tp, rr = rr_result
@@ -752,9 +789,11 @@ def detectar_mss_no_poi(
             sl_price = sl_candidates[sl_idx]
             for j in range(sl_idx + 1, len(velas_poi)):
                 v = velas_poi.iloc[j]
-                if float(v["fechamento"]) < sl_price:
+                fechamento = float(v["fechamento"])
+                # exige close bearish abaixo do nível — rejeita pavio sem corpo direcional
+                if fechamento < sl_price and fechamento < float(v["abertura"]):
                     preco = sl_price  # entrada no nível rompido (limite), não no close da vela
-                    rr_result = _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref)
+                    rr_result = _calcular_risco_rr_v2(preco, sl_ref, direcao, atr_m5, tp_ref)
                     if rr_result is None:
                         continue
                     sl, tp, rr = rr_result
@@ -812,18 +851,21 @@ def _calcular_risco_rr_v2(
     preco_entrada: float,
     sl_ref: float,
     direcao: str,
-    atr: float = 0.0,
+    atr_m5: float = 0.0,
     tp_ref: float | None = None,
 ) -> tuple[float, float, float] | None:
-    buffer = 0.1 * atr
+    buffer = 0.5 * atr_m5
     if direcao == "ALTA":
         sl = sl_ref - buffer
         risco = preco_entrada - sl
         if risco <= 0:
             return None
         tp_candidato = tp_ref if (tp_ref is not None and tp_ref > preco_entrada) else None
-        if tp_candidato is not None and (tp_candidato - preco_entrada) / risco >= 1.5:
-            tp = tp_candidato
+        if tp_candidato is not None:
+            if (tp_candidato - preco_entrada) / risco >= 1.5:
+                tp = tp_candidato
+            else:
+                return None  # barreira H4 próxima demais — projetar além dela seria rejeitado antes do TP
         else:
             tp = preco_entrada + 2.0 * risco
     else:
@@ -832,8 +874,11 @@ def _calcular_risco_rr_v2(
         if risco <= 0:
             return None
         tp_candidato = tp_ref if (tp_ref is not None and tp_ref < preco_entrada) else None
-        if tp_candidato is not None and (preco_entrada - tp_candidato) / risco >= 1.5:
-            tp = tp_candidato
+        if tp_candidato is not None:
+            if (preco_entrada - tp_candidato) / risco >= 1.5:
+                tp = tp_candidato
+            else:
+                return None  # barreira H4 próxima demais — projetar além dela seria rejeitado antes do TP
         else:
             tp = preco_entrada - 2.0 * risco
     rr = abs(tp - preco_entrada) / risco
