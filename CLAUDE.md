@@ -26,12 +26,19 @@ A arquitetura, o pipeline, os algoritmos e os contratos de API estão documentad
 ```
 specs/
 ├── spec_analisador_smc.md  ← visão geral do módulo central + funções públicas
-├── spec_estrutura.md       ← state machine ChoCH/BOS
+├── spec_estrutura.md       ← state machine ChoCH/BOS, calcular_swings_confirmados
 ├── spec_legs.md            ← legs, OBs v2, FVGs, POI composta
-├── spec_pools.md           ← EQH/EQL/PDH/PDL
-├── spec_setup.md           ← MSS LTF, score, risco/retorno
-├── spec_filtros.md         ← bias D1, sessão, premium/discount
-└── spec_configuracoes.md   ← constantes e env vars
+├── spec_pools.md           ← EQH/EQL/PDH/PDL, detectar_captura_liquidez
+├── spec_setup.md           ← MSS LTF, score, risco/retorno, pipeline 2 estágios
+├── spec_filtros.md         ← bias D1 v2, sessão, premium/discount v2
+├── spec_configuracoes.md   ← constantes, env vars, timeframes
+├── spec_timeframes.md      ← papel de cada timeframe (H4/M5/D1) no funil de decisão
+├── spec_modelos.md         ← dataclasses e tipos do domínio
+├── spec_repositorio.md     ← SQLite, schema setups/confirmacoes/velas, migrações
+├── spec_principal.md       ← orquestração principal.py, ciclo de varredura
+├── spec_notificador.md     ← envio de alertas Telegram, template de mensagem
+├── spec_provedor_dados.md  ← cache de velas SQLite + busca incremental MT5
+└── spec_diagnostico.md     ← ferramenta de auditoria debug_pipeline.py
 ```
 
 **Regra SDD:** spec antes do código. Ao modificar ou adicionar funcionalidade, atualize o spec correspondente antes de tocar no código.
