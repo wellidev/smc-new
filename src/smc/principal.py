@@ -196,7 +196,7 @@ def _detectar_e_registrar_setups(
         if not eventos_pos:
             continue
 
-        evento = eventos_pos[-1]
+        evento = eventos_pos[0]
         leg = leg_por_evento.get(evento.tempo)
 
         velas_fechadas = velas_h4.iloc[:-1]

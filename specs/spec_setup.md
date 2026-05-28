@@ -51,10 +51,10 @@ para cada pool em pools:
         # Retorna a CapturaLiquidez que varrreu o pool, ou None.
         # Procurar evento estrutural APÓS O SWEEP (captura.tempo), não
         # após a criação do pool (pool.tempo) — causalidade temporal correta.
-        eventos_pos = [e for e in eventos if e.tempo > captura.tempo]
+        eventos_pos = [e for e in eventos if e.tempo > captura.tempo and e.direcao == direcao_reversal]
         se não há eventos_pos: continue
 
-        evento = primeiro evento_pos
+        evento = eventos_pos[0]  ← PRIMEIRO evento após o sweep (causalidade: leg mais próxima)
         leg = leg associada ao evento (se existir)
 
         # Calcular POI
@@ -132,10 +132,12 @@ o preço forma micro-estrutura interna e a primeira vela que fecha além do
         Se não houver, próximo sl_idx.
       - Para j em (sh_idx + 1, len(velas_poi) - 1]:
           se velas_poi.iloc[j].fechamento > sh_price:
-              preco = fechamento; tempo = vela j
+              preco = sh_price   ← entrada no nível rompido (limite), não no close
+              tempo = vela j
               retornar ConfirmacaoEntrada(tipo="MSS", ...)
 6. Para direcao="BAIXA" (setup de venda): simétrico — swing HIGH primeiro,
    depois swing LOW posterior, depois fechamento abaixo do swing LOW.
+   preco = sl_price  ← entrada no nível rompido (limite), não no close
 7. SL/TP via _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref):
    - Para ALTA: sl_ref = swings_low[sl_idx] — o swing low que iniciou a sequência MSS
      (ponto de invalidação estrutural: abaixo dele a tese de compra falha)

@@ -725,7 +725,7 @@ def detectar_mss_no_poi(
             for j in range(sh_idx + 1, len(velas_poi)):
                 v = velas_poi.iloc[j]
                 if float(v["fechamento"]) > sh_price:
-                    preco = float(v["fechamento"])
+                    preco = sh_price  # entrada no nível rompido (limite), não no close da vela
                     rr_result = _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref)
                     if rr_result is None:
                         continue
@@ -753,7 +753,7 @@ def detectar_mss_no_poi(
             for j in range(sl_idx + 1, len(velas_poi)):
                 v = velas_poi.iloc[j]
                 if float(v["fechamento"]) < sl_price:
-                    preco = float(v["fechamento"])
+                    preco = sl_price  # entrada no nível rompido (limite), não no close da vela
                     rr_result = _calcular_risco_rr_v2(preco, sl_ref, direcao, atr, tp_ref)
                     if rr_result is None:
                         continue
